@@ -1,0 +1,335 @@
+theory DID_DPF
+begin
+
+builtins: hashing, asymmetric-encryption, symmetric-encryption, signing, revealing-signing
+functions: MAC/2
+
+/////////////////////////////////////////////////////
+//                 Restrictions                    //
+/////////////////////////////////////////////////////
+
+restriction once:
+  "All a #i #j. Once(a)@i & Once(a)@j ==> #i = #j"
+
+restriction equal:
+  "All a b #i. Eq(a, b)@i ==> a = b"
+
+restriction Verifieronce:
+  "All Verifier skV SPuserID_1 SPuserID_2 #i #j. 
+    VerifierOnce(Verifier, skV, SPuserID_1)@i & VerifierOnce(Verifier, skV, SPuserID_2)@j 
+        ==> (SPuserID_1 = SPuserID_2 & #i = #j)"
+
+restriction RegisterOnce:
+  "All SA uid1 uid2 #i #j. 
+    RegisterOnce(SA, uid1)@i & RegisterOnce(SA, uid2)@j 
+        ==> (uid1 = uid2 & #i = #j)"
+
+//=============== Non-DY Channel ==============//
+//secure channel for terminal-bank communication
+rule Terminal_Bank_Network[color='#98FB98']:
+    [   Send(S, R, channelID, msg)  ]-->[   Recv(S, R, channelID, msg)  ]
+
+
+
+//============== Infrastructure Configuration =============//
+rule KeyConfig[color='#3D2B1F']:
+    [   Fr(~secKey)   ] 
+    --[ Honest($A) ]-> 
+    [   !Ltk($A, ~secKey), !Pk($A, pk(~secKey)), Out(pk(~secKey))   ]
+
+rule InitSuperApp:
+    [   Fr(~userID)   ]--[  Once($SA)   ]->[   !SuperApp($SA, ~userID)   ]  
+
+//============== Compromise rules =============//
+rule RevealPk[color='#3D2B1F']:
+    [   !Ltk(A, skA)    ]
+    --[ Reveal(A) ]->
+    [   Out(skA)   ]
+
+rule RevealCustomerKey[color='#3D2B1F']:
+    [   !CustomerKey($Client, $SDK, privKey),    ]
+    --[ RevealCustomerKey($Client) ]->
+    [   Out(privKey)   ]
+ 
+
+//=============== Initialization ==============//
+//--- Verifier is a Service Provider ---//
+rule Init_Verifier[color='#FFD1DC']:
+    let
+        pkV = pk(skV)
+        spConfig = <~DID_verifier, pkV>
+        DID_data = <pkV, ~DID_verifier>
+    in
+    [
+        Fr(~DID_verifier),
+        !Ltk($Verifier, skV),
+        !SuperApp($SA, SPuserID)   
+    ]
+    --[ VerifierOnce($Verifier, skV, SPuserID),  
+        Once($Verifier) ]->
+    [   
+        Out(spConfig),
+        !InitVerifier($Verifier, $SA, SPuserID, skV, pkV),
+        !DID_verifier($Verifier, DID_data)
+    ]
+
+rule Init_Issuer[color='#FFF8DC']:
+    [   !Pk($Issuer, pkI), Fr(~DID_issuer) ] 
+    --[ Once($Issuer)   ]-> 
+    [ !DID_issuer($Issuer, <pkI, ~DID_issuer>) ]
+
+// A `Client` is a holder and prover in DID.
+// For a specific application, a client should 
+// first register with its SuperApp id.
+rule Init_Client[color='#9BDDFF']:
+    [
+        !SuperApp($SA, SPuserID),
+        Fr(~userId), Fr(~name),          
+        Fr(~certNo), Fr(~photo),     
+        Fr(~DeviceMetaInfo), 
+        Fr(~appName), Fr(~channelOut)
+    ]
+    --[
+        Once($Client),      // One superApp user can only register once.
+        RegisterOnce($SA, ~userId),
+        SA(SPuserID),
+        SecretName($Client, ~name),
+        SecretePhoto($Client, ~photo),
+        InitClientSA($Client, $SA)   ]->
+    [
+        // !BindAppInfo($SuperAppClient, $SuperAppSrv, ~userId, SPuserId,~name, ~certNo, ~photo, ~DeviceMetaInfo,~appName),
+        // Send($SuperAppSrv, $ServiceProvider, <~channelOut, 'https','Set_SPuserId'>, <SPuserId>)
+        Client_Register_with_SA($Client, $SA, ~userId, SPuserID, ~name, ~certNo, ~photo),
+        Call_SDK_CheckDID($Client, SPuserID)
+    ]
+
+rule SDK_new_DID[color='#9BDDFF']:
+    let 
+        PubKey = pk(~privKey) 
+    in
+    [   Call_SDK_CheckDID($Client, SPuserID),
+        Fr(~privKey), Fr(~channel)  ]
+    -->
+    [
+        !CustomerKey($Client, $SDK, ~privKey), 
+        Out(pk(~privKey)), 
+        Send($SDK, $Server, <~channel, '1', 'SDK2Srv'>, <SPuserID, PubKey>),   // Each SDK call should be bounded to each user's
+        CreatedCustomerKey($SDK, SPuserID, ~privKey, PubKey)                   // each user's SPuserID
+    ]
+
+
+rule Server_New_DID:
+    let
+        DID_data = <~Customer_DID, Customer_PubKey>        
+    in
+    [
+        Recv($SDK, $Server, <channel, '1','SDK2Srv'>, <SPuserID, Customer_PubKey>),
+        Fr(~Customer_DID),
+    ]
+    -->
+    [
+        Send($Server, $SDK, <channel,'2','Srv2SDK'>, <SPuserID, DID_data>),
+        !SaveOnChain($Server, ~Customer_DID, Customer_PubKey),
+        !SaveDIDinSDK($SDK, <~Customer_DID, Customer_PubKey>)
+    ]
+    
+rule SDK_Response_DID:
+    let
+        DID_data = <Customer_DID, Customer_PubKey>        
+    in
+    [   
+        CreatedCustomerKey($SDK, SPuserID, Customer_privKey, Customer_PubKey),
+        Recv($Server, $SDK, <channel, '2','Srv2SDK'>, <SPuserID, DID_data>),
+        Fr(~channel_SDK_to_Client)
+    ]
+    -->
+    [   
+        Send($SDK, $Client, <~channel_SDK_to_Client, '1', 'SDK2Client'>, <SPuserID, DID_data>)
+        // !SaveOnChain($Server, DID_data),
+        // !SaveDIDinSDK($SDK, DID_data)    
+    ]
+
+
+rule Complete_DID_Creation_Client[color='#9BDDFF']:
+    let
+        DID_data = <Customer_DID, Customer_PubKey>   
+        VC_request = <DID_data, name, userID, photo>     
+    in
+    [
+        Client_Register_with_SA($Client, $SA, userID, SPuserID, name, certNo, photo),
+        Recv($SDK, $Client, <channel_SDK_to_Client, '1', 'SDK2Client'>, <SPuserID, DID_data>),
+        Fr(~channel)
+    ]
+    --[ Client_with_DID($Client, $SA, SPuserID, DID_data) ]->
+    [
+        !DID_client($Client, DID_data),
+        // Issuer_Construct_VC_data($Client, SPuserID, ~channel, VC_request),
+        Client_Request_VC_data($Client, SPuserID, ~channel, VC_request),
+        Send($Client, $Issuer, <~channel,'ReqVC2Issuer', '1'>, <SPuserID, VC_request>)
+    ]
+
+rule Issuer_Build_VC[color='#FFF8DC']:
+    let 
+        DID_data = <Customer_DID, Customer_PubKey>   
+        VC_request = <DID_data, name, userID, photo>     
+        VC_msg = <name, userID>
+        VC_msg_sign = sign(VC_msg, Issuer_PrivKey)
+        envelope_key_encrypted = aenc(~envelope_key, Customer_PubKey)
+        VC_data = <senc(<VC_msg, VC_msg_sign>, ~envelope_key), envelope_key_encrypted>  // Fix: There lacks some relevant information for userID
+    in
+    [   
+        !Ltk($Issuer, Issuer_PrivKey),
+        !DID_issuer($Issuer, <pk(Issuer_PrivKey), DID_issuer>),
+        Recv($Client, $Issuer, <channel, 'ReqVC2Issuer','1'>, <SPuserID, VC_request>),
+        Fr(~envelope_key),
+    ]
+    --[ 
+        SecreteVC(VC_msg),
+        Issuer_ConfirmThisDPF($Issuer, $Client, SPuserID),
+        Issuer_Construct_VC_data($Issuer, $Client, VC_data),
+        Issuer_BuildVC_over_VC_msg($Issuer, $Client, VC_msg)  ]->
+    [
+        Send($Issuer, $Client, <channel, 'IssuerRspVC', '2'>,  VC_data),
+        Issuer_sent_VC_Client($Issuer, $Client, DID_issuer, Customer_DID, VC_data)
+    ]
+
+
+rule Client_Recv_VC_data[color='#9BDDFF']:
+    let
+        DID_data = <Customer_DID, Customer_PubKey>   
+        VC_request = <DID_data, name, userID, photo>     
+    in
+    [
+        !DID_client($Client, DID_data),
+        Client_Request_VC_data($Client, SPuserID, channel, VC_request),
+        Recv($Issuer, $Client, <channel, 'IssuerRspVC', '2'>, VC_data),
+    ]
+    --[ Client_with_VC_data($Client, $Issuer, DID_data, VC_data) ]->
+    [
+        !Client_get_VC_data($Client, SPuserID, VC_data),
+        Call_importVC($Client, SPuserID, VC_data)
+    ]
+
+
+    // !CustomerKey($Client, $SDK, ~privKey)
+rule SDK_Import_VC[color='#9BDDFF']:
+    let 
+        Customer_PubKey = pk(Customer_PrivKey)
+        envelope_key_encrypted = aenc(envelope_key, Customer_PubKey)
+        VC_envelope =  senc(<VC_msg, VC_msg_sign>, envelope_key)
+        VC_Data = <VC_envelope, envelope_key_encrypted>
+    in
+    [
+        Call_importVC($Client, SPuserID, VC_Data),
+        !CustomerKey($Client, $SDK, Customer_PrivKey)
+    ]
+    --[ SDK_store_VC($SDK, $Client, VC_msg)  ]->
+    [
+        !Client_VC_in_SDK($SDK, $Client, SPuserID, Customer_PubKey, VC_msg, VC_msg_sign)
+    ]
+
+rule SDK_Construct_VP:
+    let 
+        DID_data = <pkV, DID_verifier>
+        envelope_key_encrypted = aenc(~envelope_key, pkV)
+        VC_envelope =  senc(<VC_msg, VC_msg_sign>, ~envelope_key)
+        VP_data = <VC_envelope, envelope_key_encrypted>
+    in
+    [
+        !Client_VC_in_SDK($SDK, $Client, SPuserID, Customer_PubKey, VC_msg, VC_msg_sign),
+        !DID_verifier($Verifier, DID_data),
+        Fr(~envelope_key),
+        Fr(~channel)
+    ]
+    --[ ClientPresentVP($Client, $Verifer, SPuserID, VP_data) ]->
+    [
+        Send($Client, $Verifier, <~channel, 'jsapi', 'ShowBackVP'>, <SPuserID, VP_data>),
+        StoreVP($Client, SPuserID, VP_data)
+        // Out(<SPuserID, VP_data>)
+    ]
+
+
+rule leak_VP_userID:
+    [   StoreVP(Client, uid, VP) ]--[   LeakVP(Client, uid, VP)    ]-> [  Out(<uid, VP>)  ]
+
+
+// rule Send_Out:
+//     [ Recv(S, R, <channel, 'jsapi', 'ShowBackVP'>, msg)  ]-->[ Out()    ]
+
+rule Construct_leaky_VP:
+    [ In(<S, R, <channel, 'jsapi', 'ShowBackVP'>, msg>)   ]--[ ]->[   Recv(S, R, <channel, 'jsapi', 'ShowBackVP'>, msg) ]
+
+rule SPSrv_Verify_VP[color='#FFD1DC']:
+    let 
+        pkV = pk(skV)
+        DID_data = <pkI, DID_issuer>
+        envelope_key_encrypted = aenc(envelope_key, pkV)
+        VC_envelope = senc(<VC_msg, VC_msg_sign>, envelope_key)
+        VP_data = <VC_envelope, envelope_key_encrypted>
+    in
+    [
+        Recv($Client, $Verifier, <channel, 'jsapi', 'ShowBackVP'>, <SPuserID, VP_data>),
+        // In(<SPuserID, VP_data>), Fr(channel),
+        // !DID_verifier($Verifier, DID_data),
+        !DID_issuer($Issuer, DID_data),
+        !Ltk($Verifier, skV)
+    ]
+    --[ Eq(verify(VC_msg_sign, VC_msg, pkI), true),
+        ClientGetVerified($Client, $Verifer, SPuserID, VP_data), 
+        ClientGetPermission($Client, $Verifier, SPuserID, VC_msg)    
+    ]->
+    [   Send($Verifer, $Client, <channel, 'https','RspVerifyVP'>, <SPuserID, VP_data, VC_msg>) ]
+
+rule Client_Receive_Verification_Result:
+    [  
+        !Client_get_VC_data($Client, SPuserID, VC_data),
+        Recv($Verifer, $Client, <channel, 'https','RspVerifyVP'>, <SPuserID, VP_data, VC_msg>),
+    ]
+    --[ 
+    ]->
+    [   ClientPermission($Client, SPuserID) ]
+
+lemma executable:
+  exists-trace
+  "Ex Client Issuer Verifier SA userID DID_data VC_data VP_data #t1 #t2 #t3 #t4 #t5.
+        Client_with_DID(Client, SA, userID, DID_data)@t1 
+      & Issuer_Construct_VC_data(Issuer, Client, VC_data)@t2
+      & Client_with_VC_data(Client, Issuer, DID_data, VC_data)@t3 
+      & ClientPresentVP(Client, Verifier, userID, VP_data)@t4
+      & ClientGetVerified(Client, Verifier, userID, VP_data)@t5 "
+
+
+
+
+lemma weak_agreement:
+    "All Client Verifier userID VP_data #i.
+      ClientGetVerified(Client, Verifier, userID, VP_data)@i
+      ==> (Ex Issuer VC_data #j. Issuer_Construct_VC_data(Issuer, Client, VC_data)@j)"
+
+
+lemma non_injective_agreement:
+      "All Client Verifier userID VP_data #i.
+        ClientGetVerified(Client, Verifier, userID, VP_data)@i
+        ==> (Ex Issuer #j. Issuer_ConfirmThisDPF(Issuer, Client, userID)@j)"
+    
+
+lemma authentication:
+        "All Client Verifier userID VC_msg #i #k.
+            ClientGetPermission(Client, Verifier, userID, VC_msg)@i & SA(userID)@k
+        ==> (Ex Issuer #j.Issuer_BuildVC_over_VC_msg(Issuer, Client, VC_msg)@j )"
+
+
+lemma authentication_test:
+        "All Client Verifier userID VC_msg #i.
+            ClientGetPermission(Client, Verifier, userID, VC_msg)@i 
+        ==> ( Ex Issuer #j.Issuer_BuildVC_over_VC_msg(Issuer, Client, VC_msg)@j )"
+
+lemma injective_agreement:
+        "All Client Verifier userID VC_msg #i.
+            ClientGetPermission(Client, Verifier, userID, VC_msg)@i
+        ==> ( Ex Issuer #j.
+                (   Issuer_BuildVC_over_VC_msg(Issuer, Client, VC_msg)@j & j < i
+                  & not (Ex C V uid #k. ClientGetPermission(C, V, uid, VC_msg)@k & not (#k = #i) ) ) )
+          | ( Ex Issuer #i #j. Honest(Issuer)@i & Reveal(Issuer)@j )"
+
+end
