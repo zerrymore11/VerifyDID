@@ -47,39 +47,8 @@ class VCmsg {
     }
 }
 class Issuer {
-    private final String DEFAULT_PubKey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzaGujoar0cgDdHIMqK+2" +
-            "dm0WTPmfdStU8/tkpKJcQJpIJkId3kuIhaq4ky4i0/uyXqKpwusfjT3AH6kPJqsv" +
-            "4lz2Ti2Q8BObzf7KHNM0lmaa3orJEytGurmzXo62sfala1ucQqAO2Zndo4c1QDyr" +
-            "pNr0QM08YC2i5bCpynz2AWijZ6w7UWwI1J0t9XJFwTpvI61r1iSewDDECcJGSQqr" +
-            "ZqjBWG1mbwRKt6rQ+elsj5CTcJESZYNxV+VPphQeFL45Daj7jts2s/2PqnU+82qe" +
-            "MWODVhUIsfU0senGbcbgbFSneTR29gbiqQuiuzmB2sb5v8q1bNytSVhrfQ7NR7Y4" +
-            "wQIDAQAB" ;
-    private final String DEFAULT_PrvKey = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDNoa6OhqvRyAN0" +
-            "cgyor7Z2bRZM+Z91K1Tz+2SkolxAmkgmQh3eS4iFqriTLiLT+7JeoqnC6x+NPcAf" +
-            "qQ8mqy/iXPZOLZDwE5vN/soc0zSWZpreiskTK0a6ubNejrax9qVrW5xCoA7Zmd2j" +
-            "hzVAPKuk2vRAzTxgLaLlsKnKfPYBaKNnrDtRbAjUnS31ckXBOm8jrWvWJJ7AMMQJ" +
-            "wkZJCqtmqMFYbWZvBEq3qtD56WyPkJNwkRJlg3FX5U+mFB4UvjkNqPuO2zaz/Y+q" +
-            "dT7zap4xY4NWFQix9TSx6cZtxuBsVKd5NHb2BuKpC6K7OYHaxvm/yrVs3K1JWGt9" +
-            "Ds1HtjjBAgMBAAECggEAEpFqyjrrO/Ou1YPQ6dCIDjSL2CKNnWPEIDiPSMsnv7uk" +
-            "D98A2chXSRP2kRplkbUU0Qp+Ks2BbrG97f3y53UmIJoasZ+CtXMH1XeQN5RzbLCn" +
-            "g7iOL0Qaob96rMCqoEebKKZqkJzptQjO+eEP1BTxE4n5QVARshuc2IHLKy99JU5B" +
-            "9hB8c10yq8t/OEX+ezkhTvki/m+MMiddoWL0qzbdKfio/aoNmBRdiL9GzWqTEuCE" +
-            "aZAzf3bZdos7o7v75WSQCJWnjHWUUNynioowFCx33uxJ80auZIrW8IECbSQBV5u+" +
-            "CxK/cqepk7iW3HJGRECqTlUIUAjNBJyr6Qcaa2UBAwKBgQDpOe7yrjjlb3LLs9Ke" +
-            "YREXlhKUUu9iQvlUWMzyhCGc8n+omhdFPAY0ep3/WkMOBdOD+pAfrgWd9r392NME" +
-            "ADT9QK86zHEev/TttIltl2r+Uv+LUNH/HTDgynAj28Ath4b9NA9iBzw+qp8cmXj+" +
-            "RP7z7WSaxqmrTCyzT3xhqpUGVwKBgQDhtfM4TnS9N7Fov3gu7P5pyEnEv9dJStTb" +
-            "sr/1IfHfRb5zQ3UG8UFBjr0VQDft5pU+CHeBEWl/QJ8aasqS1gdLMc3rJf3EpWH+" +
-            "5PQlsuz0zi7d2JOmjwK3ICsZ6JN8eAvhKM/eILNXv1+zh9vz4mzJbNOJPPd1mkPf" +
-            "GGkU1g/apwKBgGxMWoiWHhVsCwJMHiEtMaKiLT5yxHX8Y4qnMYPrlzAp6t1/sA6W" +
-            "MMttpLBOWZTJX86JKyOKy1DuooqdhF73OaPfxX6oMF73A+TdUHNzPFucbs1iWiD8" +
-            "jRXU6v27rSF3LVemNP5wHal70SaWnXh00W6zbWPxnBfO53LcFgXEEC9BAoGBAKsG" +
-            "zrwcntJ9r906MBwGkiSfkl4WK1Aq9q1efZuGVBslYtE+DR/skNDXEqlWlsqaTP3L" +
-            "NppDElhNJAHFZ6fpq28r1udWSzrFQkL9Q46JTImW7eZF5GNxu9H8+wvPsmm/IOlE" +
-            "nnWm+54CscZ8rIrZSCs8XfGAk9W1xbX3bjBOn4bDAoGAI0U/EMbeFqzqf0iIGVfF" +
-            "dVsqLVCyhYcS8P7dv52K6dsKorqUgoNmVkdj/vKf9tn8j1cJgfijhvN6MuPOGDn4" +
-            "KGzeuyNbYnmMq8RhPLGHpx7hG3VBelfFFAWiPCMfftQAmPsAEL/UT25IMH2o2Vdk" +
-            "dz9brHbcDNksp9cuA52gI/8=";
+    private final String DEFAULT_PubKey = Issuer_PubKey ;
+    private final String DEFAULT_PrvKey = Issuer_PrvKey;
 
     private PublicKey getPublicKeyFromString(String publicKeyString) throws Exception {
         byte[] keyBytes = Base64.getDecoder().decode(publicKeyString);
