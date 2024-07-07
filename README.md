@@ -6,7 +6,15 @@ The repo basically include the symbolic model of a DID application and part of t
 
 Model:
 
-Properties:
+**Properties**
+
+- Executable
+
+- Weakauth
+
+- Non-injective auth
+
+- Injective auth
 
 ## Code Implementation
 
