@@ -4,7 +4,11 @@ The repo basically include the symbolic model of a DID application and part of t
 
 ## Symbolic Model
 
-Model:
+**Model**
+
+- Assumption
+
+- Threat Model
 
 **Properties**
 
