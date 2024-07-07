@@ -14,11 +14,11 @@ The repo basically include the symbolic model of a DID application and part of t
 
 - Executable
 
-- Weakauth
+- Weak_Auth
 
-- Non-injective auth
+- Non-injective_Auth
 
-- Injective auth
+- Injective_Auth
 
 ## Code Implementation
 
