@@ -35,7 +35,7 @@ public class HttpTestController {
     public String service() {
         String version = System.getenv("PUB_SERVICE_REVISION") == null ? "springboot-demo" : System.getenv("PUB_SERVICE_REVISION");
         String hostName = System.getenv("HOSTNAME") == null ? "springboot-demo" : System.getenv("HOSTNAME");
-        String result = "欢迎使用云托管!&服务版本：" + version + "&实例主机：" + hostName;
+        String result = "欢迎使用云托管!&服务版本：" + version + "&实例主机：" + hostName + "hello,world";
         return result;
     }
 }
