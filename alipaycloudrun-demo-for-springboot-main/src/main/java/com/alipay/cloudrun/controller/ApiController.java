@@ -43,7 +43,7 @@ public class ApiController {
             return new ServiceResponse<>(ErrorCode.SUCCESS, cypherText);
         }
 	}
-
+    @ControllerPointCut
     @GetMapping("/second")
     public String second() {
         return "Hello,world";
