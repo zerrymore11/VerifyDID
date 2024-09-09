@@ -1,0 +1,527 @@
+theory DID
+begin
+
+builtins: hashing, asymmetric-encryption, symmetric-encryption, signing, revealing-signing
+// functions: MAC/2
+
+/////////////////////////////////////////////////////
+//                 Restrictions                    //
+/////////////////////////////////////////////////////
+// heuristic: o "oracle"
+
+// #include "Headers.splib"
+
+#define CompromisedClient
+
+restriction once:
+  "All a #i #j. Once(a)@i & Once(a)@j ==> #i = #j"
+
+restriction equal:
+  "All a b #i. Eq(a, b)@i ==> a = b"
+
+restriction Request_VC_once:
+  "All Client Issuer VC_msg #i #j.
+      Client_request_VC(Client, Issuer, VC_msg)@i 
+    & Client_request_VC(Client, Issuer, VC_msg)@j
+    ==> (#i = #j)"
+
+
+//===== Funcion 'Call_SDK_CheckDID' is atomic ====//
+restriction atomic_function_call:
+  "not (
+      ( Ex S channel x #i. Rev(S,<channel,'SDK2Srv'>, x)@i)
+    | ( Ex S channel x #i. Rev(S,<channel,'Srv2SDK'>, x)@i)
+    | ( Ex S channel x #i. Rev(S,<channel,'SDK2Client'>, x)@i)
+  )"
+
+
+#ifdef secReqVC_exclude_request
+  restriction secChannel_Request_VC:
+  "not (
+    (Ex S channel x #i. Rev(S,<channel,'ReqVC2Issuer'>, x)@i)
+  )"
+#endif
+
+#ifdef secReqVC
+restriction secChannel_Request_VC:
+  "not (
+      ( Ex S channel x #i. Rev(S,<channel, 'ReqVC2Issuer'>, x)@i) 
+    | ( Ex S channel x #i. Rev(S,<channel, 'IssuerRspVC'>, x)@i)
+  )"
+#endif
+
+
+#ifdef secPresentVP
+restriction secChannel_Present_VP:
+  "not (
+      ( Ex S channel x #i. Rev(S,<channel, 'ShowBackVP'>, x)@i) 
+    | ( Ex S channel x #i. Rev(S,<channel, 'RspVerifyVP'>, x)@i) 
+  )"
+#endif
+
+
+//=============== Non-DY Channel ==============//
+rule send_secure:
+	  [ Send(S,R,cid,msg) ]
+  -->
+	  [ Sec(S,R,cid,msg)  ]
+
+rule receive_secure:
+	  [ Sec(S,R,cid,m)  ]
+	-->
+  	[ Recv(S,R,cid,m) ]
+
+rule secureChannel_compromised_in:
+    [ In(<S,R,cid,x>)]	
+  --[ Rev(S,cid,x)
+    , Injected(x) ]->
+	  [ Sec(S,R,cid,x)  ]
+
+rule secureChannel_compromised_out:
+	  [ Sec(S,R,cid,x) ]
+	--[ Rev(R,cid,x)  ]->
+	  [ Out(<cid,x>)  ]
+
+//============== Infrastructure Configuration =============//
+rule KeyConfig[color='#3D2B1F']:
+    [ Fr(~secKey) ]
+  --[ Honest($A)
+    , Once($A) ]->
+    [ !Ltk($A, ~secKey)
+    , !Pk($A, pk(~secKey))
+    , Out(pk(~secKey))  ]
+
+rule InitSuperApp:
+    [   Fr(~openid)   ]--[  Once($SA)   ]->[   SuperApp($SA, ~openid)   ]  
+
+//============== Compromise rules =============//
+#ifdef CompromiseParties
+rule RevealPriKey[color='#FF033E']:
+    [   !Ltk(A, skA)    ]
+    --[ Reveal(A) ]->
+    [   Out(skA)   ]
+#endif 
+
+#ifdef CompromisedClient
+rule RevealCustomerKey[color='#FF033E']:
+    [ !CustomerKey($Client, $SDK, privKey),    ]
+  --[ RevealCustomerKey($Client) ]->
+    [ Out(privKey)   ]
+#endif
+
+//=============== Initialization ==============//
+rule Init_Verifier[color='#FFD1DC']:
+    let
+      pkV = pk(skV)
+      spConfig = <~DID_verifier, pkV>
+      DID_data = <pkV, ~DID_verifier>
+    in
+    [ Fr(~DID_verifier)
+    , !Ltk($Verifier, skV)
+    , Fr(~openid)  ]
+  --[ VerifierOnce($Verifier, skV, ~openid)  // A verifier may not possess a `openid''
+     ]->
+    [ Out(spConfig)
+    , !DID_verifier($Verifier, DID_data)  ]
+
+rule Init_Issuer[color='#FFF8DC']:
+    [ !Pk($Issuer, pkI), Fr(~DID_issuer) ] 
+  --[ IssuerGetDID($Issuer, ~DID_issuer) ]-> 
+    [ !DID_issuer($Issuer, <pkI, ~DID_issuer>) ]
+
+
+rule Init_Client[color='#9BDDFF']:
+    [ SuperApp($SA, openid)
+    , Fr(~userId)
+    , Fr(~name)         
+    , Fr(~certNo)
+    , Fr(~photo)
+    , Fr(~DeviceMetaInfo)
+    , Fr(~appName)
+    , Fr(~channelOut) ]
+  --[ Once($Client)      // One superApp user can only register once. 
+    , Client($Client)
+    , SA(openid)
+    , ID(~userId)
+    , Name(~name)
+    , Photo(~photo)
+    , ClientSA($Client, openid, ~userId)  ]->
+    [ !Client_Register_with_SA($Client, $SA, ~userId, openid, ~name, ~certNo, ~photo)
+    , Call_SDK_CheckDID($Client, openid)   ]
+
+
+rule SDK_new_DID[color='#BEBEBE']:
+    let 
+      PubKey = pk(~privKey) 
+    in
+    [ Fr(~privKey)
+    , Call_SDK_CheckDID($Client, openid)
+    , Fr(~channel) ]
+  --[ AUTO_SDK_CreatePrivKey_OUT(openid, PubKey, ~channel) ]->
+    [ !CustomerKey($Client, $SDK, ~privKey) 
+    , Out(pk(~privKey)) 
+    , Send($SDK, $Server, <~channel, 'SDK2Srv'>, <openid, PubKey>)     // Each SDK call should be bounded to each user's
+    , CreatedCustomerKey($SDK, openid, ~privKey, PubKey) ]                  // each user's openid
+
+
+rule Server_New_DID[color='#BEBEBE']:
+    let
+      DID_data = <~Customer_DID, Customer_PubKey>        
+    in
+    [ Fr(~Customer_DID)
+    , Recv($SDK, $Server, <channel,'SDK2Srv'>, <openid, Customer_PubKey>)  ]
+  --[ AUTO_Server_RecvPubKey_IN(openid, Customer_PubKey, channel)
+    , AUTO_Server_SendDID_OUT(openid, ~Customer_DID, Customer_PubKey)   ]->
+    [ 
+      Send($Server, $SDK, <channel,'Srv2SDK'>, <openid, DID_data>)
+    ]
+  
+rule SDK_Response_DID[color='#BEBEBE']:
+    let
+      DID_data = <Customer_DID, Customer_PubKey>        
+    in
+    [ CreatedCustomerKey($SDK, openid, Customer_privKey, Customer_PubKey)
+    , Recv($Server, $SDK, <channel, 'Srv2SDK'>, <openid, DID_data>)
+    , Fr(~channel_SDK_to_Client)  ]
+  --[ AUTO_SDK_RecvDID_IN(openid, Customer_DID, Customer_PubKey)
+    , AUTO_SDK_SendDID_to_Client_OUT(openid, Customer_DID, Customer_PubKey, ~channel_SDK_to_Client) ]->
+    [ Send($SDK, $Client, <~channel_SDK_to_Client, 'SDK2Client'>, <openid, DID_data>)  ]
+
+
+rule Complete_DID_Creation_Client[color='#9BDDFF']:
+    let
+      DID_data = <Customer_DID, Customer_PubKey>        
+    in
+    [ !Client_Register_with_SA($Client, $SA, userID, openid, name, certNo, photo)
+    , Recv($SDK, $Client, <channel_SDK_to_Client, 'SDK2Client'>, <openid, DID_data>) ]
+  --[ Client_creation_DID($Client, openid, DID_data)
+    , AUTO_Client_recvDID_from_SDK_IN(openid, Customer_DID, Customer_PubKey, channel_SDK_to_Client)  ]->
+    [ !DID_client($Client, DID_data)  ]
+
+
+rule Client_request_VC[color='#9BDDFF']:
+    let
+      DID_data = <Customer_DID, Customer_PubKey>   
+      VC_request = <DID_data, name, userID, photo>   
+      VC_msg = <name, userID, openid>  
+    in
+    [ !DID_client($Client, DID_data)
+    , !Pk($Issuer, DID_issuer)
+    , !Client_Register_with_SA($Client, $SA, userID, openid, name, certNo, photo)
+    , Fr(~channel) ]
+  --[ Client_request_VC($Client, $Issuer, VC_msg)             // request once
+    , Client_send_VC_request($Client, $Issuer, openid, VC_msg, VC_request)    // action fact in legal trace
+    , Running($Client, $Issuer, <'client_issuer_req', VC_request>)
+      /*  Here is luxtury fact to resolve partial deconstruction */
+    , AUTO_Client_send_VC_request(~channel, userID, openid, name, Customer_DID, Customer_PubKey) ]->
+    [ Send($Client, $Issuer, < ~channel,'ReqVC2Issuer'>, <openid, VC_request>)
+    , Client_Request_VC_data($Client, openid, ~channel, VC_request, VC_msg) ]
+
+rule Issuer_Build_VC[color='#FFF8DC']:
+    let 
+      DID_data = <Customer_DID, Customer_PubKey>   
+      VC_request = <DID_data, name, userID, photo>   
+        // VC_request should be protected by some method (signature)...  
+        // TODO: It seems that the signature can not make the VC_request privacy
+        // VC_Requst := <DID_data_adversary, name_honest, useID_honest...>
+        // VC_msg = <name, userID>
+      VC_msg = <name, userID, openid>
+      VC_msg_sign = sign(VC_msg, Issuer_PrivKey)
+      envelope_key_encrypted = aenc(~envelope_key, Customer_PubKey)
+      VC_data = <senc(<VC_msg, VC_msg_sign>, ~envelope_key), envelope_key_encrypted>  // Fix: There lacks some relevant information for userID
+    in
+    [ !Ltk($Issuer, Issuer_PrivKey)
+    , !DID_issuer($Issuer, <pk(Issuer_PrivKey), DID_issuer>)
+    , Recv($Client, $Issuer, <channel, 'ReqVC2Issuer'>, <openid, VC_request>)
+    , Fr(~envelope_key) ]
+  --[ Issuer_build_VC($Issuer, $Client, openid, VC_msg, VC_data)
+    , Running($Issuer, $Client, <'issuer_client_VC', VC_data>)
+    , Running($Issuer, $Client, <'claims_VC', VC_msg>)
+    , Commit($Issuer, $Client, <'client_issuer_req', VC_request>)
+    , AUTO_Issuer_recv_VC_request(channel, VC_request, openid, name, userID, Customer_DID, Customer_PubKey)
+    // , AUTO_Issuer_send_VC_to_Client(VC_msg, Issuer_PrivKey, ~envelope_key)
+    , AUTO_Issuer_send_VC_to_Client(VC_msg, VC_data)  ]->
+    [ Send($Issuer, $Client, <channel, 'IssuerRspVC'>,  <openid, VC_data>)
+    , Issuer_sent_VC_Client($Issuer, $Client, DID_issuer, Customer_DID, VC_data)  ]
+
+rule Client_Recv_VC_data[color='#9BDDFF']:
+    let
+      Customer_PubKey = pk(Customer_PrivKey)
+      DID_data = <Customer_DID, Customer_PubKey>   
+      VC_request = <DID_data, name, userID, photo>    
+      VC_msg = <name, userID, openid>  
+      envelope_key_encrypted = aenc(envelope_key, Customer_PubKey)
+      VC_data = <senc(<VC_msg, VC_msg_sign>, envelope_key), envelope_key_encrypted>
+    in
+    [ !DID_client($Client, DID_data)
+    , !CustomerKey($Client, $SDK, Customer_PrivKey)
+    , !Pk($Issuer, pkI)
+    , Client_Request_VC_data($Client, openid, channel, VC_request, VC_msg)
+    , Recv($Issuer, $Client, <channel, 'IssuerRspVC'>, <openid, VC_data>)  ]
+  --[ Client_get_VC($Client, $Issuer, openid, VC_msg, VC_data)
+    , Commit($Client, $Issuer, <'issuer_client_VC', VC_data>)
+    , Commit($Client, $Issuer, <'claims_VC', VC_msg>)
+    , Eq(verify(VC_msg_sign, VC_msg, pkI), true )
+    // , AUTO_Client_recv_VC_from_Issuer(channel, name, userID, openid, envelope_key, Customer_PubKey)
+    , AUTO_Client_recv_VC_from_Issuer(channel, openid, VC_data) ]->
+    [ !Client_get_VC_data($Client, openid, VC_data, VC_msg)
+    // , Call_importVC($Client, openid, VC_data) 
+    , Call_importVC($Client, openid, userID, name, photo, VC_msg, VC_msg_sign) 
+    ]
+
+rule SDK_Import_VC[color='#BEBEBE']:
+    // let 
+      // Customer_PubKey = pk(Customer_PrivKey)
+      // envelope_key_encrypted = aenc(envelope_key, Customer_PubKey)
+      // VC_envelope =  senc(<VC_msg, VC_msg_sign>, envelope_key)
+      // VC_Data = <VC_envelope, envelope_key_encrypted>
+    // in
+    [ Call_importVC($Client, openid, userID, name, photo, VC_msg, VC_msg_sign) 
+      // Call_importVC($Client, openid, VC_Data)
+    , !CustomerKey($Client, $SDK, Customer_PrivKey) ]
+  --[ SDK_store_VC($Client, $SDK, VC_msg)
+    , AUTO_SDK_Import_VC(openid, userID, name)  ]->
+    [ !Client_VC_in_SDK($SDK, $Client, openid, userID, name, VC_msg, VC_msg_sign)  ]
+
+
+rule SDK_Construct_VP[color='#9BDDFF']:
+    let 
+      DID_data = <pkV, DID_verifier>
+      envelope_key_encrypted = aenc(~envelope_key, pkV)
+      VC_envelope =  senc(<VC_msg, VC_msg_sign>, ~envelope_key)
+      VP_data = <VC_envelope, envelope_key_encrypted>
+    in
+    [ !Client_VC_in_SDK($SDK, $Client, openid, userID, name, VC_msg, VC_msg_sign) 
+    , !DID_verifier($Verifier, DID_data)
+    , Fr(~envelope_key)
+    , Fr(~channel)  ]
+  --[ Client_present_VP($Client, $Verifier, openid, VC_msg, VP_data)
+    , Running(userID, $Verifier, <'client_present_VP', VP_data>)
+    , Running($Client, $Verifier, <'non_sensitive_present_VP', VP_data>)
+    /*=== If authenticates on $Client, the non-injective falsified ===*/
+    // ===> Running($Client, $Verifier, <'client_present_VP', VP_data>)   
+    , AUTO_Client_PresentVP_to_Verifier(openid, ~channel, userID, name, ~envelope_key)
+    , AUTO_Client_PresentVP(~envelope_key, openid, ~channel, VC_msg)  ]->
+    [ Send($Client, $Verifier, <~channel, 'ShowBackVP'>, <openid, VP_data>)  ]
+
+
+rule SPSrv_Verify_VP[color='#FFD1DC']:
+    let 
+        pkV = pk(skV)
+        DID_data = <pkI, DID_issuer>
+        envelope_key_encrypted = aenc(envelope_key, pkV)
+        VC_msg = <name, userID, openid>
+        VC_envelope = senc(<VC_msg, VC_msg_sign>, envelope_key)
+        VP_data = <VC_envelope, envelope_key_encrypted>
+    in
+    [ Recv($Client, $Verifier, <channel, 'ShowBackVP'>, <openid, VP_data>)
+    , !DID_issuer($Issuer, DID_data)
+    , !Ltk($Verifier, skV)  ]
+  --[ SP_verify_VP($Verifier, $Issuer, openid, VC_msg, VP_data)
+    , Eq(verify(VC_msg_sign, VC_msg, pkI), true) 
+    , Commit($Verifier, $Issuer, <'verify', VC_msg>) // The ServiceProvdier verify the VC_msg, which is issued by the Issuer
+    , Commit($Verifier, userID, <'client_present_VP', VP_data>)
+    , Commit($Verifier, $Client, <'non_sensitive_present_VP', VP_data>)
+    // , AUTO_Verifier_GetVP_from_Client(VP_data, channel, name, userID, openid, envelope_key)
+    , AUTO_Verifier_GetVP_from_Client(envelope_key, openid, channel, VC_msg) ]->
+    [ 
+      // Send($Verifer, $Client, <channel,'RspVerifyVP'>, <openid, 'verified'>) 
+      GetVerfied(userID)
+    ]
+
+rule Client_Receive_Verification_Result[color='#9BDDFF']:
+    let VC_msg = <name, userID, openid> in
+    [ !Client_get_VC_data($Client, openid, VC_data, VC_msg)
+      // , Recv($Verifer, $Client, <channel, 'https','RspVerifyVP'>, <openid, VP_data, VC_msg>)
+    , GetVerfied(userID)]
+  --[ END_GET_Verified($Client, userID) ]->
+    [ ClientPermission($Client, userID) ]
+
+lemma requstVCdata[sources]:
+" All channel userID openid name Customer_DID Customer_PubKey #i.
+    AUTO_Client_send_VC_request(channel, userID, openid, name, Customer_DID, Customer_PubKey)@i ==>
+    ( Ex #k. Name(name)@k & ID(userID)@k & SA(openid)@k & k < i)"
+
+
+lemma creationOfDID[sources]:
+  "All openid PubKey channel #i.
+    AUTO_Server_RecvPubKey_IN(openid, PubKey, channel)@i ==>
+    ( Ex #j. AUTO_SDK_CreatePrivKey_OUT(openid, PubKey, channel)@j & (j < i)) |
+    (   ( Ex #k. KU(channel)@k & k < i )
+      & ( Ex #k. KU(openid)@k & k < i ) 
+      & ( Ex #k. KU(PubKey)@k & k < i ) ) "
+
+lemma clientRecvDID[sources]:
+" All openid Customer_DID Customer_PubKey #i.
+    AUTO_SDK_RecvDID_IN(openid, Customer_DID, Customer_PubKey)@i ==>
+    ( Ex #j. AUTO_Server_SendDID_OUT(openid, Customer_DID, Customer_PubKey)@j  & (j < i)) |
+    ( Ex #k. KU(Customer_DID)@k & k < i )"
+
+lemma recvDID[sources]:
+  "All openid Customer_DID Customer_PubKey channel #i.
+    AUTO_Client_recvDID_from_SDK_IN(openid, Customer_DID, Customer_PubKey, channel)@i ==>
+    ( Ex #j. AUTO_SDK_SendDID_to_Client_OUT(openid, Customer_DID, Customer_PubKey, channel)@j & (j < i)) |
+    (   ( Ex #k. KU(channel)@k & k < i )
+      & ( Ex #k. KU(openid)@k & k < i ) 
+      & ( Ex #k. KU(Customer_DID)@k & k < i )
+      & ( Ex #k. KU(Customer_PubKey)@k & k < i )) "
+
+lemma recvReqVC[sources]:
+  "All openid name userID VC_request channel Customer_DID Customer_PubKey #i.
+    AUTO_Issuer_recv_VC_request(channel, VC_request, openid, name, userID, Customer_DID, Customer_PubKey)@i==> 
+    ( Ex #j. AUTO_Client_send_VC_request(channel, userID, openid, name, Customer_DID, Customer_PubKey)@j & j < i ) |
+    (   ( Ex #k. KU(channel)@k & k < i )
+      & ( Ex #k. KU(openid)@k & k < i ) 
+      & ( Ex #k. KU(userID)@k & k < i )
+      & ( Ex #k. KU(name)@k & k < i )
+      & ( Ex #k. KU(Customer_PubKey)@k & k < i ) )"
+
+lemma getVCdata[sources]:
+  "All channel openid VC_data #i.
+    AUTO_Client_recv_VC_from_Issuer(channel, openid, VC_data)@i ==>  
+    ( Ex VC_msg #j. AUTO_Issuer_send_VC_to_Client(VC_msg, VC_data)@j ) |
+    (  ( Ex #k. KU(channel)@k & k < i )
+      & ( Ex #k. KU(openid)@k & k < i  ) 
+      & ( Ex #k. KU(VC_data)@k & k < i ) )"
+
+lemma legal_execution:
+exists-trace
+" Ex Client Issuer SDK Verifier openid VC_request VC_msg VC_data VP_data
+      #i #j #l #m #n #k.
+      Client_send_VC_request(Client, Issuer, openid, VC_msg, VC_request)@i
+    & Issuer_build_VC(Issuer, Client, openid, VC_msg, VC_data)@j
+    & Client_get_VC(Client, Issuer, openid, VC_msg, VC_data)@l
+    & SDK_store_VC(Client, SDK, VC_msg)@m
+    & Client_present_VP(Client, Verifier, openid, VC_msg, VP_data)@n
+    & SP_verify_VP(Verifier, Issuer, openid, VC_msg, VP_data)@k
+    & (i < j)  & (j < l) & (l < m) & (m < n) & (n < k)
+    /*==== All channels between different parties are SECURE =====*/
+    & not (
+        ( Ex S channel x #i. Rev(S,<channel,'SDK2Srv'>, x)@i)
+      | ( Ex S channel x #i. Rev(S,<channel,'Srv2SDK'>, x)@i)
+      | ( Ex S channel x #i. Rev(S,<channel,'SDK2Client'>, x)@i)
+      | ( Ex S channel x #i. Rev(S,<channel, 'ReqVC2Issuer'>, x)@i) 
+      | ( Ex S channel x #i. Rev(S,<channel, 'IssuerRspVC'>, x)@i) 
+      | ( Ex S channel x #i. Rev(S,<channel, 'ShowBackVP'>, x)@i) 
+      | ( Ex S channel x #i. Rev(S,<channel, 'RspVerifyVP'>, x)@i))
+    /*==== The Client only sends one request to Issuer for a VC ====*/
+    & ( All Client I1 I2 VC1 VC2 #i #j.
+          Client_request_VC(Client, I1, VC1)@i 
+        & Client_request_VC(Client, I2, VC2)@j ==> (#i = #j) )"
+
+#ifdef CompromiseParties
+lemma aliveness_issuer_VC_request:
+  "All Client Issuer VC_request #i #j.
+    Commit(Issuer, Client, <'client_issuer_req', VC_request>)@i & Client(Client)@j ==> 
+    ( Ex #j. Running(Client, Issuer, <'client_issuer_req', VC_request>)@j ) 
+    |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k ) |
+    ( Ex A #k. Reveal(A)@k  )
+    "
+#else
+lemma aliveness_issuer_VC_request:
+"All Client Issuer VC_request #i #j.
+  Commit(Issuer, Client, <'client_issuer_req', VC_request>)@i & Client(Client)@j ==> 
+    ( Ex #j. Running(Client, Issuer, <'client_issuer_req', VC_request>)@j ) |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k )"
+#endif
+/*================= 😈 counterexample ===================*/
+/*=== A client initialize sessions with two issuers. ===*/
+/*=== The VC_data received by client is composed of  ===*/
+/*=== messagesent by Issuer.1 and Issuer.            ===*/
+/*======================================================*/
+#ifdef CompromiseParties
+lemma aliveness_client_get_VC:
+  "All Client Issuer VC_data #i.
+    Commit(Client, Issuer, <'issuer_client_VC', VC_data>)@i ==> 
+    ( Ex #j. Running(Issuer, Client, <'issuer_client_VC', VC_data>)@j ) |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k  )|
+    ( Ex A #k. Reveal(A)@k  )"
+#else 
+lemma aliveness_client_get_VC:
+  "All Client Issuer VC_data #i.
+    Commit(Client, Issuer, <'issuer_client_VC', VC_data>)@i ==> 
+    ( Ex #j. Running(Issuer, Client, <'issuer_client_VC', VC_data>)@j ) |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k  )"
+#endif
+  
+#ifdef CompromiseParties
+lemma aliveness_claims:
+  "All Client Issuer VC_msg #i.
+    Commit(Client, Issuer, <'claims_VC', VC_msg>)@i==> 
+    ( Ex #j. Running(Issuer, Client, <'claims_VC', VC_msg>)@j ) |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k  ) |
+    ( Ex A #k. Reveal(A)@k  )"
+#else
+lemma aliveness_claims:
+"All Client Issuer VC_msg #i.
+    Commit(Client, Issuer, <'claims_VC', VC_msg>)@i==> 
+    ( Ex #j. Running(Issuer, Client, <'claims_VC', VC_msg>)@j ) |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k  )"
+#endif
+
+/*====================================================*/
+/*=== The lemma ensures that VC can not be forged, ===*/
+/*=== i.e., VC is issued by a ISSUER legally.      ===*/
+/*====================================================*/
+#ifdef CompromiseParties
+lemma aliveness_vc_msg:
+  "All Verifier Issuer VC_msg #i.
+    /*=== For a VC which can be verified correctly, ===*/
+    Commit(Verifier, Issuer, <'verify', VC_msg>)@i==> 
+      /*=== it has been issued by corresponding ISSUER, ===*/
+    ( Ex Client #j. Running(Issuer, Client, <'claims_VC', VC_msg>)@j ) |
+      /*=== or ISSUER has been compromised. ===*/ 
+    ( Ex #k. Reveal(Issuer)@k  )"
+#else
+lemma aliveness_vc_msg:
+  "All Verifier Issuer VC_msg #i.
+    Commit(Verifier, Issuer, <'verify', VC_msg>)@i==> 
+    ( Ex Client #j. Running(Issuer, Client, <'claims_VC', VC_msg>)@j )"
+#endif
+  
+
+#ifdef CompromiseParties
+lemma aliveness_verify_VP:
+  "All Verifier userID VP_data #i.
+    Commit(Verifier, userID, <'client_present_VP', VP_data>)@i ==> 
+    ( Ex #j. Running(userID, Verifier, <'client_present_VP', VP_data>)@j ) |
+    ( Ex advClient #k. RevealCustomerKey(advClient)@k  ) |
+    ( Ex A #j. Reveal(A)@j )
+    "
+lemma aliveness_verify_VP_on_non_sensitive_id:
+    "All Verifier Client VP_data #i.
+      Commit(Verifier, Client, <'non_sensitive_present_VP', VP_data>)@i ==> 
+      ( Ex #j. Running(Client, Verifier, <'non_sensitive_present_VP', VP_data>)@j ) |
+      ( Ex advClient #k. RevealCustomerKey(advClient)@k  ) |
+      ( Ex A #j. Reveal(A)@j )
+      "
+#else
+lemma aliveness_verify_VP:
+  "All Verifier userID VP_data #i.
+    Commit(Verifier, userID, <'client_present_VP', VP_data>)@i ==> 
+    ( Ex #j. Running(userID, Verifier, <'client_present_VP', VP_data>)@j ) 
+    |( Ex advClient #k. RevealCustomerKey(advClient)@k  ) 
+    "
+lemma aliveness_verify_VP_on_non_sensitive_id:
+    "All Verifier Client VP_data #i.
+      Commit(Verifier, Client, <'non_sensitive_present_VP', VP_data>)@i ==> 
+      ( Ex #j. Running(Client, Verifier, <'non_sensitive_present_VP', VP_data>)@j ) |
+      ( Ex advClient #k. RevealCustomerKey(advClient)@k  ) "
+#endif
+
+#ifdef CompromiseParties
+lemma VP_non_injective_VC:
+" All Verifier Issuer VC_msg VP_data openid #i.
+  SP_verify_VP(Verifier, Issuer, openid, VC_msg, VP_data)@i
+  ==> ( Ex Client VC_data #j. Issuer_build_VC(Issuer, Client, openid, VC_msg, VC_data)@j & j < i)
+      | ( Ex #j. Reveal(Issuer)@j )
+      | ( Ex #j. Reveal(Verifier)@j )"
+#else
+lemma VP_non_injective_VC:
+  " All Verifier Issuer VC_msg VP_data openid #i.
+    SP_verify_VP(Verifier, Issuer, openid, VC_msg, VP_data)@i
+    ==> ( Ex Client VC_data #j. Issuer_build_VC(Issuer, Client, openid, VC_msg, VC_data)@j & j < i)"
+#endif
+ 
+end
