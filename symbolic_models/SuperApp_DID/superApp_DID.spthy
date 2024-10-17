@@ -1,0 +1,204 @@
+theory DID_
+begin
+
+
+builtins: natural-numbers, multiset
+
+functions: 
+pk/1, aenc/2, adec/2,
+senc/2, sdec/2,
+sign/2, checksign/3, true/0,
+getEK/3,
+SD_jwt/1, // Selective Discloure
+hash/1
+
+
+equations: sdec(senc(x, k), k) = x
+equations: adec(aenc(x, pk(k)), k) = x
+equations: checksign(sign(m, k), m, pk(k)) = true
+
+
+//*=== Install SuperApp client ===*/
+// openid is an unique identifier for each user in SuperApp
+rule InstallSuperAppClient:
+	[	Fr(~openid), 
+		Fr(~sensitiveData),
+		Fr(~disclosure) ]
+--[	LInstallSuperApp(~openid) ]->
+	[ !SuperAppClient(~openid),
+		!DB(~openid, ~disclosure, ~sensitiveData) ]
+
+
+/*=== Setup MasterKey (MK)  ===*/ 
+/*-------------------------------------------------------------*/
+/*	MK serves as the root of WeChat security and is used for
+		querying EK and AT. WeChat assumes that the MK should
+		be strictly held within the MS and never disclosed to MF or
+		any other parties. */
+/*-------------------------------------------------------------*/
+rule MiniprogramRegister:
+	[	Fr(~masterKey),	
+		Fr(~appid), 
+		!SuperAppClient(~openid)	]
+--[	LMiniprogramRegister(~appid, ~openid, ~masterKey)	]->
+	[	!MB(~appid, ~masterKey),    // the backend of mini-program
+		!MF(~appid, ~masterKey),
+		!SuperAppClientInit(~openid, ~appid, ~masterKey),
+		!MiniProgram(~appid, ~masterKey),
+		!MK(~masterKey) ]
+
+
+/*=== Login Token (LT) Acquisition. ===*/ 
+/*-------------------------------------*/
+/*To ensure users only access their data, WeChat generates 
+  a user-specific LT when they log in, which is combined
+	with the appID and MK to obtain the EK.
+	
+	LT is a 128-bit hex string valid for only five minutes, generated during login
+	MF delivers it to MB for querying EK within the time window.
+	This design prevents unauthorized collection 
+	of user data at scale by MB*/
+/*------------------------------------- */
+rule SetupSessionKey:
+	let sessionKey = getEK(~appid, ~masterKey, ~LT) in
+	[	In(%t),
+		In(%delta),
+		Fr(~LT),
+		!MB(~appid, ~masterKey),
+		!SuperAppClientInit(~openid, ~appid, ~masterKey) ]
+--[	TimeStamp(%t),
+		LSetupSessionKey(~openid, ~appid, sessionKey, %delta)	]->
+	[	!SuperAppSession(~openid, ~appid, ~masterKey, sessionKey),
+		!MBsession(~appid, ~masterKey, ~LT),
+		// MBsessionContent(~appid, ~masterKey, ~LT, <'null'>),
+		!EK(sessionKey)	]
+
+
+
+/*	=== Encryption the sensitive data using EK (sessionKey) ===*/
+/*-------------------------------------------------------------*/
+/*	MK serves as the root of WeChat security and is used for
+		querying EK and AT. WeChat assumes that the MK should
+		be strictly held within the MS and never disclosed to MF or
+		any other parties.*/
+/*-------------------------------------------------------------*/
+rule EncryptDataEK:
+	[	In(%t),
+		!DB(openid, ~disclosure, ~sensitiveData),
+		!SuperAppSession(openid, appid, masterKey, sessionKey) ]
+--[	TimeStamp(%t),
+		LsessionKeyUsed(sessionKey)	]->
+	[	Out(senc(< ~disclosure, ~sensitiveData>, sessionKey)) ]
+
+
+rule DecryptDataEK:
+	let sessionKey = getEK(appid, masterKey, LT)
+			new_content = content + <data>
+	in
+	[	In(%t),
+		In(senc(data, sessionKey)),
+		!MBsession(appid, masterKey, LT),
+		// MBsessionContent(appid, masterKey, LT, content),
+		!EK(sessionKey) ]
+--[	TimeStamp(%t),
+		LsessionKeyUsed(sessionKey)	]->
+	[	MBsessionContent(appid, masterKey, LT, data)]
+
+
+
+
+/*=== key pair configuration ===*/
+rule KeyConig:
+	[	Fr(~k)	]
+--[	]->
+	[	!PK($A, pk(~k)),
+		!SK($A, ~k),
+		Out(pk(~k))	]
+
+
+rule SessionSetup:
+	[	Fr(~sid), 
+		Fr(~k)]
+	-->
+	[	Session(~sid, ~k)	]
+
+
+/*=== Initialization for Holder ===*/
+// rule HolderInitialization:
+// 	[	!MiniProgram(~appid, ~masterKey),
+// 		Fr(~s),
+// 		In(%t) ]
+// --[	TimeStamp(%t),
+// 		LMiniProgramConfigKeyPair(~appid, ~masterKey, ~s)	]->
+// 	[	!MiniProgramInit(~appid, ~masterKey, ~s),
+// 		!SK(~appid, ~s),
+// 		!PK(~appid, pk(~s)),
+// 		Out(pk(~s))	]
+
+
+
+rule RequestVC:
+	[	MBsessionContent(appid, masterKey, LT, data),
+		!MiniProgram(appid, masterKey),
+		!SK($Holder, skH),
+		!PK($Issuer, pkI)	]
+--[]->
+	[	Out(aenc(data, pkI)),
+		MBRequestVC(appid, masterKey, data)	]
+
+
+
+/* <Issuer-signed JWT>~<Disclosure 1>~<Disclosure 2>~...~<Disclosure N>~ */
+/* 
+An SD-JWT+KB with Disclosures:
+<Issuer-signed JWT>~<Disclosure 1>~<Disclosure N>~<KB-JWT>
+Each digest value ensures the integrity of, and maps to, the respective Disclosure.
+Digest values are calculated using a hash function over the Disclosures, 
+each of which contains a cryptographically secure random salt, 
+the claim name (only when the claim is an object property), and the claim value/ */
+ rule CredencialIssurance:
+	let data = <disclosure, protected>
+			pkI = pk(skI)
+			digest = <hash(disclosure), hash(protected)>
+			Issuer_signed_JWT = <digest, sign(digest, skI)>
+			Credential = <Issuer_signed_JWT, disclosure> 
+	in
+	[	In(aenc(data, pkI)),
+		Fr(~envelope_key),
+		!PK($Holder, pkH),
+		!SK($Issuer, skI)]
+--[	LCredencialIssurance()	]->
+	[]
+
+
+restriction TimeIncreasing:
+  "All #i #j %t1 %t2.
+     TimeStamp(%t1)@i & TimeStamp(%t2)@j & i < j ==> %t1 << %t2"
+
+
+lemma UseKeyLegal[reuse]:
+	"All #i %t sessionKey.
+		LsessionKeyUsed(sessionKey)@i &	TimeStamp(%t)@i
+	==>
+		Ex #j %t0 %delta openid appid.
+		TimeStamp(%t0)@j & LSetupSessionKey(openid, appid, sessionKey, %delta)@j"
+
+
+lemma UseKeyLegals:
+	"All #i %t sessionKey.
+		LsessionKeyUsed(sessionKey)@i &	TimeStamp(%t)@i
+	==>
+		Ex #j %t0 %delta openid appid.
+		TimeStamp(%t0)@j & LSetupSessionKey(openid, appid, sessionKey, %delta)@j 
+		& %t << %t0 %+ %delta
+		"
+
+/*=== Another model ===*/
+/*AT is a critical key for enabling the consumption of paid
+	online services. It is queried by MS and remains stored there
+	until it expires, typically after two hours. WeChat assumes
+	that the consumption of services using AT is carried out by
+	MS instead of MF.*/
+
+
+end
