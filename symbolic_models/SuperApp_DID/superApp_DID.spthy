@@ -39,7 +39,7 @@ rule InstallSuperAppClient:
 rule MiniprogramRegister:
 	[	Fr(~masterKey),	
 		Fr(~appid), 
-		!SuperAppClient(~openid)	]
+		!SuperAppClient(~openid) ]//[FIXME] openid is different for each mini-program 
 --[	LMiniprogramRegister(~appid, ~openid, ~masterKey)	]->
 	[	!MB(~appid, ~masterKey),    // the backend of mini-program
 		!MF(~appid, ~masterKey),
