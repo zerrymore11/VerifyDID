@@ -93,6 +93,7 @@ rule KeyConfig[color='#3D2B1F']:
 
 rule InitSuperApp:
     [   Fr(~openid)   ]--[  Once($SA)   ]->[   SuperApp($SA, ~openid)   ]  
+//[FIXME] Modify the openid part. Maybe we can use UserID instead of openid.
 
 //============== Compromise rules =============//
 #ifdef CompromiseParties
@@ -141,12 +142,12 @@ rule Init_Client[color='#9BDDFF']:
     , Fr(~channelOut) ]
   --[ Once($Client)      // One superApp user can only register once. 
     , Client($Client)
-    , SA(openid)
+    , SA(openid) //[FIXME] This function seems to be useless.
     , ID(~userId)
     , Name(~name)
     , Photo(~photo)
     , ClientSA($Client, openid, ~userId)  ]->
-    [ !Client_Register_with_SA($Client, $SA, ~userId, openid, ~name, ~certNo, ~photo)
+    [ !Client_Register_with_SA($Client, $SA, ~userId, openid, ~name, ~certNo, ~photo) //[FIXME] Should the SuperApp know the certNo and photo?
     , Call_SDK_CheckDID($Client, openid)   ]
 
 
@@ -244,7 +245,7 @@ rule Issuer_Build_VC[color='#FFF8DC']:
     [ Send($Issuer, $Client, <channel, 'IssuerRspVC'>,  <openid, VC_data>)
     , Issuer_sent_VC_Client($Issuer, $Client, DID_issuer, Customer_DID, VC_data)  ]
 
-rule Client_Recv_VC_data[color='#9BDDFF']:
+rule Client_Recv_VC_data[color='#9BDDFF']: //[FIXME] The VC_data is decrypted in the SDK, not in the mini-program front-end.
     let
       Customer_PubKey = pk(Customer_PrivKey)
       DID_data = <Customer_DID, Customer_PubKey>   
@@ -315,7 +316,7 @@ rule SPSrv_Verify_VP[color='#FFD1DC']:
         VP_data = <VC_envelope, envelope_key_encrypted>
     in
     [ Recv($Client, $Verifier, <channel, 'ShowBackVP'>, <openid, VP_data>)
-    , !DID_issuer($Issuer, DID_data)
+    , !DID_issuer($Issuer, DID_data) //[FIXME] Should we model the OpenAPI of requesting Issuer's DID?
     , !Ltk($Verifier, skV)  ]
   --[ SP_verify_VP($Verifier, $Issuer, openid, VC_msg, VP_data)
     , Eq(verify(VC_msg_sign, VC_msg, pkI), true) 

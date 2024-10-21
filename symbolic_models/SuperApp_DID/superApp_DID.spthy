@@ -20,6 +20,7 @@ equations: checksign(sign(m, k), m, pk(k)) = true
 
 //*=== Install SuperApp client ===*/
 // openid is an unique identifier for each user in SuperApp
+// [FIXME] openid is different for each mini-program
 rule InstallSuperAppClient:
 	[	Fr(~openid), 
 		Fr(~sensitiveData),
@@ -36,6 +37,7 @@ rule InstallSuperAppClient:
 		be strictly held within the MS and never disclosed to MF or
 		any other parties. */
 /*-------------------------------------------------------------*/
+// [FIXME] MK is the root key for mini-program, which is different for each mini-program and is used in OpenAPI link
 rule MiniprogramRegister:
 	[	Fr(~masterKey),	
 		Fr(~appid), 
