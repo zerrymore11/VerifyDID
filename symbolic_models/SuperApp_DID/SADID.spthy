@@ -1,0 +1,375 @@
+theory DID_
+begin
+
+
+builtins: natural-numbers, multiset
+
+functions: 
+pk/1, aenc/2, adec/2,
+senc/2, sdec/2,
+sign/2, checksign/3, true/0,
+getEK/3,
+SD_jwt/1, // Selective Discloure
+hash/1,
+maskedID/2
+
+
+equations: sdec(senc(x, k), k) = x
+equations: adec(aenc(x, pk(k)), k) = x
+equations: checksign(sign(m, k), m, pk(k)) = true
+
+
+restriction equal:
+  "All a b #i. Eq(a, b)@i ==> a = b"
+  
+  
+restriction TimeIncreasing:
+  "All #i #j %t1 %t2.
+    TimeStamp(%t1)@i & TimeStamp(%t2)@j & i < j ==> %t1 << %t2"
+
+
+
+/*=== HTTPS: TLS channel ===*/
+rule Domain:
+  []
+  -->
+  [ !Domain($Domain) ]
+
+rule DomainCompromise:
+  [ !Domain($Domain) ]
+  --[ CompromisedDomain($Domain)
+    , AdversaryActivity() ]->
+  [ !DomainCompromise($Domain) ]
+
+rule TLSClientOut[color=#FFFFFF]:
+  [ TLSClient_Out(method, ~sess, $Domain, msg), 
+    !Domain($Domain) ]
+  -->
+  [ !TLSClient(method, ~sess, $Domain, msg) ]
+
+// rule TLSAdversaryClientOut[color=#FF6961]:
+//   [ In(method), 
+//     In(~sess), 
+//     In(msg), 
+//     !Domain($Domain) ]
+//   -->
+//   [ !TLSClient(method, ~sess, $Domain, msg) ]
+
+rule TLSServerOut[color=#FFFFFF]:
+  [ TLSServer_Out(method, ~sess, $Domain, msg), 
+    !Domain($Domain) ]
+  -->
+  [ !TLSServer(method, ~sess, $Domain, msg) ]
+
+// rule TLSAdversaryServerOut[color=#FF6961]:
+//   [ In(method), 
+//     In(~sess), 
+//     In(msg), 
+//     !DomainCompromise($Domain) ]
+//   --[ AdversaryActivity() ]->
+//   [ !TLSServer(method, ~sess, $Domain, msg) ]
+
+rule TLSClientToServer[color=#FFFFFF]:
+  [ !TLSClient(method, ~sess, $Domain, msg) ]
+  -->
+  [ TLSServer_In(method, ~sess, $Domain, msg) ]
+
+// rule TLSClientToAdversaryServer[color=#FF6961]:
+//   [ !TLSClient(method, ~sess, $Domain, msg)
+//   , !DomainCompromise($Domain) ]
+//   --[ AdversaryActivity() ]->
+//   [ Out(msg), Out(~sess) ]
+
+rule TLSServerToClient[color=#FFFFFF]:
+  [ !TLSServer(method, ~sess, $Domain, msg) ]
+  -->
+  [ TLSClient_In(method, ~sess, $Domain, msg) ]
+
+// rule TLSServerToAdversaryClient[color=#FF6961]:
+//   [ In(~adversarySess), !TLSServer(method, ~adversarySess, $Domain, msg) ]
+//   --[ AdversaryActivity() ]->
+//   [ Out(msg) ]
+
+
+/*=== Phone Initialization ===*/
+rule Phone:
+  []
+  --[ ClaimNumber($A, $Number)
+    , IsPhoneNumber($Number) ]->
+  [ !Phone($A, $Number) ]
+
+
+/*=== Install SuperApp client ===*/
+/*------------------------------------------------------------------------------------ */
+// An OpenID is a unique identifier for Alipay users at the application level. 
+// When Alipay users access different applications such as mini-programs, 
+// web-based mobile applications, or Official Accounts, a unique OpenID is generated. 
+/*------------------------------------------------------------------------------------ */
+rule InstallSuperAppClient:
+	[	!Phone($UserName, $Number),
+		Fr(~userid), 
+		Fr(~sensitiveData),
+		Fr(~disclosure) ]
+--[	LInstallSuperApp(~userid) ]->
+	[ !SuperAppClient($UserName, $Number, ~userid, 'null'),
+		!DB(~userid, ~disclosure, ~sensitiveData) ]
+
+
+restriction InstallOnce:
+	"All openid1 openid2 #i #j.
+		LInstallSuperApp(openid1)@i & LInstallSuperApp(openid2)@j ==> #i = #j"
+
+
+/** The private key is stored in TEE within the end superApp  */
+rule keyConfiguration:
+[ !SuperAppClient($UserName, $Number, ~userid, 'null'),
+	Fr(~k)]
+--[	LClient($Holder)	]->
+[	!TEELTK($Holder, ~userid, ~k),
+	!TEEPK($Holder, ~userid, pk(~k)),
+	Out(pk(~k))	]
+
+
+/*!DID stands for the DID document, which is known publicly in blockchain */
+rule registerDIDDocument:
+	[ !SuperAppClient($UserName, $Number, ~userid, 'null'),
+		!TEEPK($Holder, ~userid, pubKey)	]
+--[	LClientRegisterDIDdocument()	]->
+	[	!DID(<'context', $context>, <'id', $id>, <'auth', pubKey>)  ]
+	
+
+/*=== Anouymous openid for different mini-programs ===*/
+/*---------------------------------------------------- */
+// Furthermore, for the same user, the OpenID differs 
+// across various applications. For instance, the OpenID 
+// for the same user will vary between different mini-programs, 
+// and similarly, it will differ across various web-based mobile applications.
+rule MiniprogramRegister:
+	// function maskedID returns an anouymous openid for mini-program
+	let openid = maskedID(userid, ~salt)
+	in
+	[	Fr(~salt),
+		Fr(~appid),
+    Fr(~k),
+		!SuperAppClient($UserName, $Number, userid, appidPool)	]
+--[	LMiniprogramRegister($A, userid, appidPool+< ~appid >)	]->
+	[	
+		/*=== The miniProgram `appid` is register within SuperApp $A, ===*/
+		/*=== whose identifier is masked as `openid`.        					===*/
+		MiniProgram($A, openid, ~appid),
+    Out(pk(~k)),
+    !MLTK($A, ~appid, ~k),
+    !MPK($A, ~appid, pk(~k)),
+    !DID(<'context', $context>, <'id', $A>, <'auth', pk(~k)>),
+		!SuperAppClient($UserName, $Number, userid, appidPool+< ~appid >) ]
+
+
+restriction RegisterOnce:
+  "All A B userid1 userid2 appidPool1  appidPool2 #i #j.
+      LMiniprogramRegister(A, userid1, appidPool1)@i 
+    & LMiniprogramRegister(B, userid2, appidPool2)@j  ==> #i = #j"
+
+
+
+lemma StrictIncreaseAppidPool[use_induction, reuse]:
+  "All A userid appidPool1 appidPool2 #i #j. 
+      LMiniprogramRegister(A, userid, appidPool1)@i
+    & LMiniprogramRegister(A, userid, appidPool2)@j
+    & #i < #j
+    ==>
+      appidPool1 << appidPool2"
+
+lemma IncreaseAppidPool[use_induction, reuse]:
+  "All A userid appidPool1 appidPool2 #i #j. 
+      LMiniprogramRegister(A, userid, appidPool1)@i
+    & LMiniprogramRegister(A, userid, appidPool2)@j
+    & #i < #j
+    ==>
+      not (appidPool2 << appidPool1)"
+
+
+rule MiniProgramFrontEndBackEnd:
+	[	MiniProgram($A, openid, appid)	]
+--[	LMPFrontend($A, openid, appid)  ]->
+	[	!MF($A, openid, appid), 
+    !MB($A, openid, appid)  ]
+
+
+/*=== Oauth 2.0 authCode flow ===*/
+/*-------------------------------------------------------*/
+
+rule AuthCodeRequest:
+  [ !MF($Issuer, openid, appid),
+    Fr(~sess),
+    Fr(~req) ]
+--[]->
+  [ St_MF_AuthCodeReq($Issuer, openid, appid),
+    TLSClient_Out('GET', ~sess, $Issuer, <'authCodeReq', ~req>) ]
+
+
+rule SuperAppGenerateAuthCode:
+  [ TLSServer_In('GET', ~sess, $Issuer, <'authCodeReq', ~req>),
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    Fr(~authCode),
+    // In(%t),
+    In(%lifeTime) ]
+  --[ 
+      // TimeStamp(%t),
+      LAuthCodeGenerate(%lifeTime, ~authCode) ]->
+  [ TLSServer_Out('GET', ~sess, $Issuer, <'authCode', ~authCode>),
+    AuthCode(~authCode)  ]
+
+
+rule MFgetAuthCode:
+  [ St_MF_AuthCodeReq($Issuer, openid, appid),
+    TLSClient_In('GET', sess, $Issuer, <'authCode', authCode>),
+    Fr(~sessPost),
+    // In(%t) 
+  ]
+--[ 
+    // TimeStamp(%t) 
+  ]->
+  [ St_MF_GetAuthCode($Issuer, openid, appid, authCode),
+    TLSClient_Out('POST', ~sessPost, $Issuer, <'authCode', authCode>) ]
+
+
+rule MBgetAuthCode:
+  [ 
+    // In(%t),
+    !MB($Issuer, openid, appid),
+    TLSServer_In('POST', sess, $Issuer, <'authCode', authCode>) ]
+--[ 
+    // TimeStamp(%t),
+    LMBGetAuthCode(appid, authCode) ]->
+  [ St_MB_GetAuthCode($Issuer, openid, appid, authCode) ]
+
+
+rule MBCallOauthToken:
+  [ St_MB_GetAuthCode($Issuer, openid, appid, authCode),
+    !MB($Issuer, openid, appid),
+    Fr(~sessToken)
+    // In(%t) 
+  ]
+--[ 
+    // TimeStamp(%t),
+    LAuthCodeConsume(authCode)  ]->
+  [ TLSClient_Out('POST', ~sessToken, $Issuer, <'tokenReq', authCode>),
+    St_MB_TokenReq($Issuer, openid, appid, authCode) ]
+
+
+rule SuperAppGenerateToken:
+  [ TLSServer_In('POST', ~sess, $Issuer, <'tokenReq', authCode>),
+    AuthCode(code),
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    Fr(~token),
+    // In(%t) 
+  ]
+--[ Eq(code, authCode),
+    // TimeStamp(%t) 
+  ]->
+  [ TLSServer_Out('POST', ~sess, $Issuer, <'token', ~token>),
+    Token(~token)  ]
+
+
+rule MBCallInfoShareAPI:
+  [ 
+    // In(%t),
+    !MB($Issuer, openid, appid),
+    St_MB_TokenReq($Issuer, openid, appid, authCode),
+    TLSClient_In('POST', ~sess, $Issuer, <'token', token>),
+    Fr(~sessCall) ]
+--[ 
+    // TimeStamp(%t) 
+  ]->
+  [ St_MB_CallInfoShare($Issuer, openid, appid, token),
+    TLSClient_Out('GET', ~sessCall, $Issuer, <'accessInfoReq', token>) ]
+
+
+rule SuperAppReturnValue:
+  [ TLSServer_In('GET', ~sess, $Issuer, <'accessInfoReq', token>),
+    Token(token),  //Verify the token matching
+    !DB(userid, disclosure, sensitiveData),
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    // In(%t) 
+  ]
+--[ 
+    // TimeStamp(%t) 
+  ]->
+  [ TLSServer_Out('GET', ~sess, $Issuer, <'accessInfo', <disclosure, sensitiveData>>)]
+
+
+
+rule MBgetSentitiveData:
+  [ 
+    // In(%t),
+    !MB($Issuer, openid, appid),
+    TLSClient_In('GET', ~sess, $Issuer, <'accessInfo', <disclosure, sensitiveData>>)]
+--[ 
+    // TimeStamp(%t) 
+  ]->
+  [ !MBDB($Issuer, openid, appid, disclosure, sensitiveData) ]
+
+
+// We divide the data into two parts: 
+// the first part is kept private, while the second part is disclosed for constructing the VP.
+rule MBConstructCredential:
+  let VC_msg = <disclosure, sensitiveData>
+      VC_msg_sign = sign(VC_msg, PrivKey)
+      envelope_key_encrypted = aenc(~envelope_key, pubKey)
+      VC_data = <senc(<VC_msg, VC_msg_sign>, ~envelope_key), envelope_key_encrypted>
+  in
+  [ !MBDB($Issuer, openid, appid, disclosure, sensitiveData),
+    !MLTK($Issuer, appid, PrivKey),
+    !TEEPK($Holder, userid, pubKey), // userid is not accessible
+    Fr(~envelope_key) ]
+--[ LCredentialIssurance($Issuer, appid, VC_data)  ]->
+  [ !VC(VC_data) ]
+  
+
+lemma test:
+  exists-trace
+  "Ex #i Issuer appid VC.
+    LCredentialIssurance(Issuer, appid, VC)@i"
+
+
+restriction validAuthCode:
+	"All #i %t authCode #j %t0 %lifeTime.
+      LAuthCodeConsume(authCode)@i & TimeStamp(%t)@i
+    & LAuthCodeGenerate(%lifeTime, authCode)@j
+    & TimeStamp(%t0)@j 
+	  ==>
+      %t << %t0 %+ %lifeTime"
+
+
+lemma loop_break[reuse, use_induction]:
+  "All A userid appidPool #i.
+    LMiniprogramRegister(A, userid, appidPool)@i
+    ==>
+      Ex #j.
+        LInstallSuperApp(userid)@j
+      & #j < #i"
+
+
+
+
+lemma sanity_check[reuse]:
+  "All #i A openid appid.
+    LMPFrontend(A, openid, appid)@i
+    ==>
+    Ex appidPool userid #j.
+        LMiniprogramRegister(A, userid, appidPool)@j
+      & #j < #i
+      & appid << appidPool"
+
+
+
+// lemma sanity_check:
+// 	exists-trace
+// 	"Ex openid appid1 appid2 A #i #j.
+// 		LMiniprogramRegister(A, openid, appid1)@i
+// 	& LMiniprogramRegister(A, openid, appid2)@j
+// 	& #i < #j"
+
+
+
+end
