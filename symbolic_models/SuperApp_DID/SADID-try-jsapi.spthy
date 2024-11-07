@@ -1,0 +1,649 @@
+theory DID_
+begin
+
+
+builtins: natural-numbers, multiset
+
+//heuristic: o "oracleDID"
+
+functions: 
+pk/1, aenc/2, adec/2,
+senc/2, sdec/2,
+sign/2, checksign/3, true/0,
+getEK/3,
+SD_jwt/1, // Selective Discloure
+hash/1,
+maskedID/2
+
+
+equations: sdec(senc(x, k), k) = x
+equations: adec(aenc(x, pk(k)), k) = x
+equations: checksign(sign(m, k), m, pk(k)) = true
+
+restriction equal:
+  "All a b #i. Eq(a, b)@i ==> a = b"
+
+
+tactic: executability
+presort: s
+prio:
+    regex ".*MF\(.*"
+prio:
+    regex ".*St_\(.*"
+prio:
+    regex ".*TLSServer_In\(.*"
+prio:
+    regex ".*TLSClient_In\(.*"
+prio:
+    regex ".*MB\(.*" 
+deprio:
+    regex ".*⊏.*\+x.*"
+deprio:
+    regex ".*⊏.*"
+deprio:
+    regex ".*SuperAppClient\(.*"
+deprio:
+    regex ".*SuperAppServer\(.*"
+
+tactic: test123
+presort: s
+prio:
+    regex ".*MF\(.*"
+prio:
+    regex ".*St_\(.*"
+prio:
+    regex ".*TLSServer_In\(.*"
+// prio:
+//     isFactName "!Phone"
+// prio:
+//     isFactName "!MB.*"
+deprio:
+    regex ".*SuperAppClient\(.*"
+// deprio:
+//     isFactName "!SuperAppServer"
+
+
+/*=== HTTPS: TLS channel ===*/
+rule Domain:
+  []
+  -->
+  [ !Domain($Domain) ]
+
+rule DomainCompromise:
+  [ !Domain($Domain) ]
+  --[ CompromisedDomain($Domain)
+    , AdversaryActivity() ]->
+  [ !DomainCompromise($Domain) ]
+
+rule TLSClientOut[color=#FFFFFF]:
+  [ TLSClient_Out(method, ~sess, $Domain, msg), 
+    !Domain($Domain) ]
+  -->
+  [ !TLSClient(method, ~sess, $Domain, msg) ]
+
+// rule TLSAdversaryClientOut[color=#FF6961]:
+//   [ In(method), 
+//     In(~sess), 
+//     In(msg), 
+//     !Domain($Domain) ]
+//   -->
+//   [ !TLSClient(method, ~sess, $Domain, msg) ]
+
+rule TLSServerOut[color=#FFFFFF]:
+  [ TLSServer_Out(method, ~sess, $Domain, msg), 
+    !Domain($Domain) ]
+  -->
+  [ !TLSServer(method, ~sess, $Domain, msg) ]
+
+// rule TLSAdversaryServerOut[color=#FF6961]:
+//   [ In(method), 
+//     In(~sess), 
+//     In(msg), 
+//     !DomainCompromise($Domain) ]
+//   --[ AdversaryActivity() ]->
+//   [ !TLSServer(method, ~sess, $Domain, msg) ]
+
+rule TLSClientToServer[color=#FFFFFF]:
+  [ !TLSClient(method, ~sess, $Domain, msg) ]
+  -->
+  [ TLSServer_In(method, ~sess, $Domain, msg) ]
+
+// rule TLSClientToAdversaryServer[color=#FF6961]:
+//   [ !TLSClient(method, ~sess, $Domain, msg)
+//   , !DomainCompromise($Domain) ]
+//   --[ AdversaryActivity() ]->
+//   [ Out(msg), Out(~sess) ]
+
+rule TLSServerToClient[color=#FFFFFF]:
+  [ !TLSServer(method, ~sess, $Domain, msg) ]
+  -->
+  [ TLSClient_In(method, ~sess, $Domain, msg) ]
+
+// rule TLSServerToAdversaryClient[color=#FF6961]:
+//   [ In(~adversarySess), !TLSServer(method, ~adversarySess, $Domain, msg) ]
+//   --[ AdversaryActivity() ]->
+//   [ Out(msg) ]
+
+
+
+/*=== Phone Initialization ===*/
+rule Phone[color=#004225]:
+  []
+  --[ ClaimNumber($A, $Number)
+    , IsPhoneNumber($Number) ]->
+  [ !Phone($A, $Number) ]
+
+
+/*=== Install SuperApp client ===*/
+/*--------------------------------------------*/
+/* A userid is a unique identifier for Alipay 
+ * users at the application level. When Alipay 
+ * users access different applications such as 
+ * mini-programs, web-based mobile applications, 
+ * or Official Accounts, another OpenID is generated. */
+/*------------------------------------------- */
+rule InstallSuperAppClient[color=#6495ED]:
+	[	!Phone($UserName, $Number),
+		Fr(~userid), 
+		Fr(~sensitiveData),
+		Fr(~disclosure),
+    Fr(~k)
+   ]
+--[	LInstallSuperApp(~userid) ]->
+	[ 
+    SuperApp($UserName, $Number, ~userid, 'null'),
+    // !SuperAppClient($UserName, $Number, ~userid, 'null'),
+    // !SuperAppServer($UserName, $Number, ~userid, 'null'),
+    !TEELTK($Holder, ~userid, ~k), // DID private key
+	  !TEEPK($Holder, ~userid, pk(~k)),
+	  Out(pk(~k)),
+		!DB(~userid, ~disclosure, ~sensitiveData) ]
+
+
+restriction InstallOnce:
+	"All userid1 userid2 #i #j.
+		LInstallSuperApp(userid1)@i & LInstallSuperApp(userid2)@j ==> #i = #j"
+
+
+/*!DID stands for the DID document, which is known publicly in blockchain */
+rule registerDIDDocument[color=#6495ED]:
+	[ 
+    // SuperAppClient($UserName, $Number, ~userid, 'null'),
+		!TEEPK($Holder, ~userid, pubKey)	]
+--[	LClientRegisterDIDdocument()	]->
+	[	
+    // SuperAppClient($UserName, $Number, ~userid, 'null'),
+    !DID(<'context', $context>, <'id', $id>, <'auth', pubKey>)  ]
+	
+
+/*=== Anouymous openid for different mini-programs ===*/
+/*----------------------------------------------------*/
+/* Furthermore, for the same user, the OpenID differs 
+ * across various applications. For instance, the OpenID 
+ * for the same user will vary between different mini-
+ * programs, and similarly, it will differ across various
+ * web-based mobile applications.*/
+/*----------------------------------------------------*/
+rule MiniprogramRegister[color=#FFF8E7]:
+	/*==== function maskedID returns an anouymous openid for mini-program ====*/
+	[	
+		Fr(~appid),
+    Fr(~openid),
+    Fr(~k),
+    SuperApp($UserName, $Number, userid, appidPool),
+    // !SuperAppServer($UserName, $Number, userid, appidPool),
+		// !SuperAppClient($UserName, $Number, userid, appidPool)
+  	]
+--[	LPoolExpand(userid, appidPool),
+    LMiniprogramRegister($A, userid, appidPool ++ ~appid)	]->
+	[	
+		/*=== The miniProgram `appid` is register within SuperApp $A, ===*/
+		/*=== whose identifier is masked as `openid`.        					===*/
+		MiniProgram($A, ~openid, ~appid),
+    Out(pk(~k)),
+    !MLTK($A, ~appid, ~k),
+    !MPK($A, ~appid, pk(~k)),
+    !DID(<'context', $context>, <'id', $A>, <'auth', pk(~k)>),
+    SuperApp($UserName, $Number, userid, appidPool++ ~appid ),
+		// !SuperAppClient($UserName, $Number, userid, appidPool+< ~appid >),
+    // !SuperAppServer($UserName, $Number, userid, appidPool+< ~appid >) 
+  ]
+
+
+restriction IncreasingPool:
+  "All userid Pool #i #j.
+    LPoolExpand(userid, Pool)@i & LPoolExpand(userid, Pool)@j 
+    ==> #i = #j"
+
+
+lemma firstInstall[reuse, use_induction]:
+"All userid Pool #i.
+  LPoolExpand(userid, Pool)@i
+  ==> 
+  (Ex #j. LInstallSuperApp(userid)@j & #j < #i)"
+
+
+restriction PoolExpand:
+  "All userid Pool1 Pool2 #i #j.
+    LPoolExpand(userid, Pool1)@i & LPoolExpand(userid, Pool2)@j & #i < #j
+    ==> Pool1 << Pool2"
+
+
+
+restriction RegisterOnce:
+  "All A userid1 appidPool1  appidPool2 #i #j.
+      LMiniprogramRegister(A, userid1, appidPool1)@i 
+    & LMiniprogramRegister(A, userid1, appidPool2)@j  ==> #i = #j"
+
+
+rule SAfrontendBackend:
+  [SuperApp($UserName, $Number, userid, appidPool)]
+-->
+  [		
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    !SuperAppServer($UserName, $Number, userid, appidPool)
+  ]
+
+rule MiniProgramFrontEndBackEnd:
+	[	MiniProgram($A, openid, appid)	]
+--[	LMPFrontend($A, openid, appid)  ]->
+	[	!MF($A, openid, appid), 
+    !MB($A, openid, appid)  ]
+
+
+/*=== Oauth 2.0 authCode flow ===*/
+/*-------------------------------------------------------*/
+rule AuthCodeRequest[color=#FDD5B1]:
+  [ !MF($Issuer, openid, appid),
+    Fr(~sess),
+    Fr(~req) ]
+--[ Issuer(appid),
+    LIssurerAuthCodeRequest($Issuer, appid, ~req) ]->
+  [ St_MF_AuthCodeReq($Issuer, ~sess, openid, appid),
+    TLSClient_Out('GET', ~sess, $Issuer, <'authCodeReq', appid, ~req>) ]
+
+
+rule SuperAppGenerateAuthCode[color=#6495ED]:
+  [ TLSServer_In('GET', ~sess, $Issuer, <'authCodeReq', appid, ~req>),
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    Fr(~authCode),
+    // In(%t),
+    In(%lifeTime) ]
+--[ 
+    // TimeStamp(%t),
+    ValidMsg(appid, appidPool),
+    LAuthCodeGenerate(userid, %lifeTime, ~authCode) ]->
+  [ 
+    TLSServer_Out('GET', ~sess, $Issuer, <'authCode', appid, ~authCode>),
+    AuthCode(~authCode)  ]
+
+
+restriction OneAuthCode:
+  "All #i #j t1 t2 lifeTime1 lifeTime2 authCode1 authCode2.
+      LAuthCodeGenerate(t1, lifeTime1, authCode1)@i 
+    & LAuthCodeGenerate(t2, lifeTime2, authCode2)@j
+    ==> 
+    #i = #j"
+
+
+rule MFgetAuthCode[color=#FDD5B1]:
+  [ St_MF_AuthCodeReq($Issuer, sess, openid, appid),
+    TLSClient_In('GET', sess, $Issuer, <'authCode', appid, authCode>),
+    Fr(~sessPost),
+    // In(%t) 
+  ]
+--[ 
+    // TimeStamp(%t) 
+    LMFGetAuthCode($Issure, appid, authCode)
+  ]->
+  [ St_MF_GetAuthCode($Issuer, openid, appid, authCode),
+    TLSClient_Out('POST', ~sessPost, $Issuer, <'authCode', appid, authCode>) ]
+
+
+rule MBgetAuthCode[color=#FDFD96]:
+  [ 
+    // In(%t),
+    St_MF_GetAuthCode($Issuer, openid, appid, authCode),
+    TLSServer_In('POST', sess, $Issuer, <'authCode', appid, authCode>) ]
+--[ 
+    // TimeStamp(%t),
+    LMBGetAuthCode($Issuer, appid, authCode) ]->
+  [ St_MB_GetAuthCode($Issuer, openid, appid, authCode) ]
+
+
+
+
+rule MBCallOauthToken[color=#FDFD96]:
+  [ St_MB_GetAuthCode($Issuer, openid, appid, authCode),
+    Fr(~sessToken)
+    // In(%t) 
+  ]
+--[ 
+    // TimeStamp(%t),
+    LAuthCodeConsume(authCode)  ]->
+  [ TLSClient_Out('POST', ~sessToken, $Issuer, <'tokenReq', appid, authCode>),
+    St_MB_TokenReq($Issuer, openid, appid, authCode) ]
+
+
+rule SuperAppGenerateToken[color=#6495ED]:
+  [ TLSServer_In('POST', ~sess, $Issuer, <'tokenReq', appid, authCode>),
+    AuthCode(code),
+    !SuperAppServer($UserName, $Number, userid, appidPool),
+    Fr(~token),
+    // In(%t) 
+  ]
+--[ Eq(code, authCode),
+    ValidMsg(appid, appidPool),
+    // TimeStamp(%t) 
+  ]->
+  [ 
+    TLSServer_Out('POST', ~sess, $Issuer, <'token', appid, ~token>),
+    Token(~token)  ]
+
+
+rule MBCallInfoShareAPI[color=#FDFD96]:
+  [ 
+    // In(%t),
+    !MB($Issuer, openid, appid),
+    St_MB_TokenReq($Issuer, openid, appid, authCode),
+    TLSClient_In('POST', ~sess, $Issuer, <'token', appid, token>),
+    Fr(~sessCall) ]
+--[ 
+    // TimeStamp(%t) 
+  ]->
+  [ St_MB_CallInfoShare($Issuer, openid, appid, token),
+    TLSClient_Out('GET', ~sessCall, $Issuer, <'accessInfoReq', appid, token>) ]
+
+
+rule SuperAppReturnValue[color=#FDD5B1]:
+  [ TLSServer_In('GET', ~sess, $Issuer, <'accessInfoReq', appid, token>),
+    Token(token),  //Verify the token matching
+    !DB(userid, disclosure, sensitiveData),
+    !SuperAppServer($UserName, $Number, userid, appidPool),
+    // In(%t) 
+  ]
+--[ 
+    ValidMsg(appid, appidPool)
+    // TimeStamp(%t) 
+  ]->
+  [ 
+    TLSServer_Out('GET', ~sess, $Issuer, <'accessInfo', appid, <disclosure, sensitiveData>>)]
+
+
+
+rule MBgetSentitiveData[color=#FDFD96]:
+  [ 
+    // In(%t),
+    St_MB_CallInfoShare($Issuer, openid, appid, token),
+    // !MB($Issuer, openid, appid),
+    TLSClient_In('GET', ~sess, $Issuer, <'accessInfo', appid, <disclosure, sensitiveData>>)]
+--[ 
+    LMBGetSensitiveData(appid, <disclosure, sensitiveData>)// TimeStamp(%t) 
+  ]->
+  [ !MBDB($Issuer, openid, appid, <disclosure, sensitiveData>) ]
+
+
+
+/*=== Selective Discloure ===*/
+/*------------------------------------------------------------------------------------*/
+/*  <Issuer-signed JWT>~<Disclosure 1>~<Disclosure 2>~...~<Disclosure N>~ 
+ * An SD-JWT+KB with Disclosures:
+ * <Issuer-signed JWT>~<Disclosure 1>~<Disclosure N>~<KB-JWT>
+ * Each digest value ensures the integrity of, and maps to, the respective Disclosure.
+ * Digest values are calculated using a hash function over the Disclosures, 
+ * each of which contains a cryptographically secure random salt, 
+ * the claim name (only when the claim is an object property), and the claim value. */
+/*------------------------------------------------------------------------------------*/
+rule MBConstructCredential[color=#FDFD96]: 
+  let digest = <hash(disclosure), hash(sensitiveData)>
+      Issuer_signed_JWT = <digest, sign(digest, PrivKey)>
+      credential = Issuer_signed_JWT ++ disclosure ++ sensitiveData
+      envelope_key_encrypted = aenc(~envelope_key, pubKey)
+      VC_data = <senc(Issuer_signed_JWT, ~envelope_key), envelope_key_encrypted>
+  in
+  [ !MBDB($Issuer, openid, appid, <disclosure, sensitiveData>),
+    !MLTK($Issuer, appid, PrivKey),
+    !TEEPK($Holder, userid, pubKey), // userid is not accessible
+    Fr(~envelope_key),
+    Fr(~sess) ]
+--[ LCredentialIssurance($Issuer, appid, VC_data)  ]->
+  /* The Mini-program generates a VC in the backend */
+  [ 
+    // !VC(<VC_msg, pubKey, VC_msg_sign>)
+    TLSClient_Out('POST', ~sess, $Issuer, <'VC_data', appid, VC_data>),
+  ]
+  
+
+rule SuperAppStoreVC[color=#6495ED]:
+  let pkH = pk(skH)
+      digest = <hash(disclosure), hash(sensitiveData)>  
+      Issuer_signed_JWT = <digest, signature>
+      credential = Issuer_signed_JWT ++ disclosure ++ sensitiveData 
+      envelope_key_encrypted = aenc(envelope_key, pkH)
+      VC_data = <senc(Issuer_signed_JWT, envelope_key), envelope_key_encrypted>
+  in
+  [ TLSServer_In('POST', sess, $Issuer, <'VC_data', appid, VC_data>),
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    !MPK($Issuer, appid, pkI),
+    !TEELTK($Holder, userid, skH),
+    !DB(userid, disclosure, sensitiveData)     ]
+--[ Eq(checksign(signature, digest, pkI), true),
+    ValidMsg(appid, appidPool),
+    LSuperAppStoreVC(userid, credential)  ]->
+  /*==  The credential is stored in THE Client of SuperApp, e.g., TEE. ==*/
+  [ 
+    !VC(credential)]
+
+
+
+// rule revealVC:
+//   [ !VC(Credential) ]
+// --[ Reaveal() ]->
+//   [ Out(Credential) ]
+
+
+rule PresentationRequest[color=#F4C2C2]:
+  [ !MF($Verifier, openid, appid),
+    // !SuperAppClient($UserName, $Number, userid, appidPool),
+    Fr(~sess),
+    Fr(~ShowReq) ]
+--[ Verifier(appid),
+    // ValidMsg(appid, appidPool),
+    LVerifierShowPreReq($Verifier, appid, ~ShowReq)  ]->
+  [ St_MF_PresentReq($Verifier, ~sess, openid, appid, ~ShowReq),
+    TLSClient_Out('GET', ~sess, $Verifier, <'PresentationReq', appid, ~ShowReq>) ]
+
+
+restriction UniqueRole:
+  "not (
+      Ex #i #j appid.
+        Issuer(appid)@i & Verifier(appid)@j )"
+
+rule SuperAppConstructVPwithDisclosure[color=#6495ED]:
+  let credential = Issuer_signed_JWT ++ disclosure ++ sensitiveData 
+      payload = Issuer_signed_JWT ++ disclosure
+      proof = sign(payload, skH)
+      VP = <payload, proof>
+      envelope_key_encrypted = aenc(~envelope_key, pkV)
+      encryptedVP = senc(VP, ~envelope_key)
+      Presentation = <encryptedVP, envelope_key_encrypted>
+  in
+  [ St_MF_PresentReq($Verifier, sess, openid, appid, ~ShowReq),
+    TLSServer_In('GET', sess, $Verifer, <'PresentationReq', appid, ~ShowReq>),
+    !SuperAppClient($UserName, $Number, userid, appidPool),
+    !TEELTK($Holder, userid, skH),
+    !MPK($Verifier, appid, pkV),
+    !VC(credential),
+    Fr(~envelope_key) ]
+--[ ValidMsg(appid, appidPool),
+    LHolderPresentVP(userid, appid, ~ShowReq, VP) ]->
+  [ 
+    TLSServer_Out('GET', sess, $Verifier, <'PresentationVP', appid, Presentation>) ]
+
+
+
+restriction replayReq:
+  "All userid appid req VP1 VP2 #i #j.
+    LHolderPresentVP(userid, appid, req, VP1)@i
+  & LHolderPresentVP(userid, appid, req, VP2)@j
+  ==> #i = #j
+"
+
+rule MBVerifyPresentation[color=#F4C2C2]:
+  let 
+      pkV = pk(skV)
+      digest = <prefixHash, postfixHash>
+			Issuer_signed_JWT = <digest, signature>
+      payload = Issuer_signed_JWT ++ disclosure
+      VP = <payload, proof>
+      envelope_key_encrypted = aenc(envelope_key, pkV)
+      encryptedVP = senc(VP, envelope_key)
+      Presentation = <encryptedVP, envelope_key_encrypted>
+  in
+  [ TLSClient_In('GET', sess, $Verifier, <'PresentationVP', appid, Presentation>),
+    !MLTK($Verifier, appid, skV),
+    !MPK($Issuer, IssueID, pkI),
+    !TEEPK($Holder, userid, pkH)  ]
+--[ Eq(checksign(proof, payload, pkH), true),
+    Eq(checksign(signature, digest, pkI), true),
+    Eq(hash(disclosure), prefixHash),
+    LPresentationVerify($Verifier, appid, payload, VP)  ]->
+  [ ]
+
+
+
+restriction ValidMsg:
+  "All Pool appid #i.
+    ValidMsg(appid, Pool)@i ==> appid << Pool"  
+
+#ifdef exec
+
+restriction AuthCodeReqOnce:
+  "All Issuer appid req1 req2 #i #j.
+      LIssurerAuthCodeRequest(Issuer, appid, req1)@i
+    & LIssurerAuthCodeRequest(Issuer, appid, req2)@j
+    ==> #i = #j"
+
+
+
+restriction OnceConstructionVC:
+  "All Issuer appid VC1 VC2 #i #j.
+    LCredentialIssurance(Issuer, appid, VC1)@i
+  & LCredentialIssurance(Issuer, appid, VC2)@j
+  ==> #i = #j"
+
+
+restriction OncePresentationReq:
+  "All V1 V2 appid1 appid2 req1 req2 #i #j.
+      LVerifierShowPreReq(V1, appid1, req1)@i 
+    & LVerifierShowPreReq(V2, appid2, req2)@j 
+    ==> #i = #j"
+
+
+lemma exec_all[heuristic={executability}]:
+  exists-trace
+  "Ex Issuer appidI authCodeReq #t0
+      userid lifeTime authCode #t1
+      Verifier 
+      appidV
+      VC_data 
+      credential 
+      // payload
+       ShowReq 
+      // VP
+      #t2 
+      #t3 
+      #t4 
+      #t5
+      #tx
+      #t6 
+      // #t7 
+      // #t8
+      .
+      LIssurerAuthCodeRequest(Issuer, appidI, authCodeReq)@t0
+    & LAuthCodeGenerate(userid, lifeTime, authCode)@t1
+    & LMFGetAuthCode(Issuer, appidI, authCode)@t2
+    & LMBGetAuthCode(Issuer, appidI, authCode)@t3 
+    & LAuthCodeConsume(authCode)@t4
+    & LCredentialIssurance(Issuer, appidI, VC_data)@tx
+    & LSuperAppStoreVC(userid, credential)@t5
+    & LVerifierShowPreReq(Verifier, appidV, ShowReq)@t6
+    // & LHolderPresentVP(userid, appidV, ShowReq, VP)@t7
+    // & LPresentationVerify(Verifier, appidV, payload, VP)@t8
+    /* Selective disclosure */
+    // & payload << credential
+    "
+
+lemma test123[heuristic={executability}] :
+  exists-trace
+  "Ex userid credential #i.
+  LSuperAppStoreVC(userid, credential)@i"
+
+lemma authenticationVP:
+  "All V appidV payload VP #i.
+    LPresentationVerify(V, appidV, payload, VP)@i
+    ==> 
+    Ex userid req #j.
+      LHolderPresentVP(userid, appidV, req, VP)@j  & #j < #i
+  "
+
+
+#endif
+
+
+// lemma exec0:
+//   exists-trace
+//   "Ex userid credential #i.
+//     LSuperAppStoreVC(userid, credential)@i"
+
+// lemma exec1:
+//   exists-trace
+//   "Ex #i Issuer appid VC.
+//     LCredentialIssurance(Issuer, appid, VC)@i"
+
+
+// restriction validAuthCode:
+// 	"All #i %t authCode #j %t0 %lifeTime.
+//       LAuthCodeConsume(authCode)@i & TimeStamp(%t)@i
+//     & LAuthCodeGenerate(%lifeTime, authCode)@j
+//     & TimeStamp(%t0)@j 
+// 	  ==>
+//       %t << %t0 %+ %lifeTime"
+
+
+lemma loop_break[reuse, use_induction]:
+  "All A userid appidPool #i.
+    LMiniprogramRegister(A, userid, appidPool)@i
+    ==>
+      Ex #j.
+        LInstallSuperApp(userid)@j
+      & #j < #i"
+
+
+lemma sanity_check[reuse]:
+  "All #i A openid appid.
+    LMPFrontend(A, openid, appid)@i
+    ==>
+    Ex appidPool userid #j.
+        LMiniprogramRegister(A, userid, appidPool)@j
+      & #j < #i
+      & appid << appidPool"
+
+
+lemma StrictIncreaseAppidPool[use_induction, reuse]:
+"All A userid appidPool1 appidPool2 #i #j. 
+    LMiniprogramRegister(A, userid, appidPool1)@i
+  & LMiniprogramRegister(A, userid, appidPool2)@j
+  & #i < #j
+  ==>
+    appidPool1 << appidPool2"
+
+lemma IncreaseAppidPool[use_induction, reuse]:
+"All A userid appidPool1 appidPool2 #i #j. 
+    LMiniprogramRegister(A, userid, appidPool1)@i
+  & LMiniprogramRegister(A, userid, appidPool2)@j
+  & #i < #j
+  ==>
+    not (appidPool2 << appidPool1)"
+
+end
