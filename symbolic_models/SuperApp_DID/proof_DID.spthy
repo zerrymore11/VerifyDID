@@ -1,0 +1,1253 @@
+theory DID_ begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset, natural-numbers
+functions: SD_jwt/1, adec/2, aenc/2, checksign/3, fst/1, getEK/3,
+           hash/1, maskedID/2, pair/2, pk/1, sdec/2, senc/2, sign/2, snd/1,
+           true/0
+equations:
+    adec(aenc(x, pk(k)), k) = x,
+    checksign(sign(m, k), m, pk(k)) = true,
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x, k), k) = x,
+    snd(<x.1, x.2>) = x.2
+
+tactic: executability
+presort: s
+prio: {id}
+  regex".*MF\(.*"
+prio: {id}
+  regex".*St_\(.*"
+prio: {id}
+  regex".*TLSServer_In\(.*"
+prio: {id}
+  regex".*TLSClient_In\(.*"
+prio: {id}
+  regex".*MB\(.*"
+deprio: {id}
+  regex".*⊏.*\+x.*"
+deprio: {id}
+  regex".*⊏.*"
+deprio: {id}
+  regex".*SuperAppClient\(.*"
+deprio: {id}
+  regex".*SuperAppServer\(.*"
+
+
+tactic: test123
+presort: s
+prio: {id}
+  regex".*MF\(.*"
+prio: {id}
+  regex".*St_\(.*"
+prio: {id}
+  regex".*TLSServer_In\(.*"
+deprio: {id}
+  regex".*SuperAppClient\(.*"
+
+
+tactic: HolderPresentVP
+presort: s
+deprio: {id}
+  regex".*⊏.*"
+
+
+
+heuristic: o "oracleDID"
+
+
+
+
+
+restriction equal:
+  "∀ a b #i. (Eq( a, b ) @ #i) ⇒ (a = b)"
+  // safety formula
+
+rule (modulo E) Domain:
+   [ ] --> [ !Domain( $Domain ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) DomainCompromise:
+   [ !Domain( $Domain ) ]
+  --[ CompromisedDomain( $Domain ), AdversaryActivity( ) ]->
+   [ !DomainCompromise( $Domain ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) TLSClientOut[color=#ffffff]:
+   [ TLSClient_Out( method, ~sess, $Domain, msg ), !Domain( $Domain )
+   ]
+  -->
+   [ !TLSClient( method, ~sess, $Domain, msg ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) TLSServerOut[color=#ffffff]:
+   [ TLSServer_Out( method, ~sess, $Domain, msg ), !Domain( $Domain )
+   ]
+  -->
+   [ !TLSServer( method, ~sess, $Domain, msg ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) TLSClientToServer[color=#ffffff]:
+   [ !TLSClient( method, ~sess, $Domain, msg ) ]
+  -->
+   [ TLSServer_In( method, ~sess, $Domain, msg ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) TLSServerToClient[color=#ffffff]:
+   [ !TLSServer( method, ~sess, $Domain, msg ) ]
+  -->
+   [ TLSClient_In( method, ~sess, $Domain, msg ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Phone[color=#004225]:
+   [ ]
+  --[ ClaimNumber( $A, $Number ), IsPhoneNumber( $Number ) ]->
+   [ !Phone( $A, $Number ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) InstallSuperAppClient[color=#6495ed]:
+   [
+   !Phone( $UserName, $Number ), Fr( ~userid ), Fr( ~sensitiveData ),
+   Fr( ~disclosure ), Fr( ~k )
+   ]
+  --[ LInstallSuperApp( ~userid ) ]->
+   [
+   SuperApp( $UserName, $Number, ~userid, 'null' ),
+   !TEELTK( $Holder, ~userid, ~k ),
+   !TEEPK( $Holder, ~userid, pk(~k) ), Out( pk(~k) ),
+   !DB( ~userid, ~disclosure, ~sensitiveData )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+restriction InstallOnce:
+  "∀ userid1 userid2 #i #j.
+    ((LInstallSuperApp( userid1 ) @ #i) ∧
+     (LInstallSuperApp( userid2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+rule (modulo E) registerDIDDocument[color=#6495ed]:
+   [ !TEEPK( $Holder, ~userid, pubKey ) ]
+  --[ LClientRegisterDIDdocument( ) ]->
+   [ !DID( <'context', $context>, <'id', $id>, <'auth', pubKey> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MiniprogramRegister[color=#fff8e7]:
+   [
+   Fr( ~appid ), Fr( ~openid ), Fr( ~k ),
+   SuperApp( $UserName, $Number, userid, appidPool )
+   ]
+  --[
+  LPoolExpand( userid, appidPool ),
+  LMiniprogramRegister( $A, userid, (~appid++appidPool) )
+  ]->
+   [
+   MiniProgram( $A, ~openid, ~appid ), Out( pk(~k) ),
+   !MLTK( $A, ~appid, ~k ), !MPK( $A, ~appid, pk(~k) ),
+   !DID( <'context', $context>, <'id', $A>, <'auth', pk(~k)> ),
+   SuperApp( $UserName, $Number, userid, (~appid++appidPool) )
+   ]
+
+  // loop breaker: [3]
+  /* has exactly the trivial AC variant */
+
+restriction IncreasingPool:
+  "∀ userid Pool #i #j.
+    ((LPoolExpand( userid, Pool ) @ #i) ∧
+     (LPoolExpand( userid, Pool ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+lemma firstInstall [reuse, use_induction]:
+  all-traces
+  "∀ userid Pool #i.
+    (LPoolExpand( userid, Pool ) @ #i) ⇒
+    (∃ #j. (LInstallSuperApp( userid ) @ #j) ∧ (#j < #i))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ userid Pool #i.
+  (LPoolExpand( userid, Pool ) @ #i)
+ ∧
+  ∀ #j. (LInstallSuperApp( userid ) @ #j) ⇒ ¬(#j < #i)"
+*/
+by sorry
+
+restriction PoolExpand:
+  "∀ userid Pool1 Pool2 #i #j.
+    (((LPoolExpand( userid, Pool1 ) @ #i) ∧
+      (LPoolExpand( userid, Pool2 ) @ #j)) ∧
+     (#i < #j)) ⇒
+    (Pool1 ⊏ Pool2)"
+  // safety formula
+
+restriction RegisterOnce:
+  "∀ A userid1 appidPool1 appidPool2 #i #j.
+    ((LMiniprogramRegister( A, userid1, appidPool1 ) @ #i) ∧
+     (LMiniprogramRegister( A, userid1, appidPool2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+rule (modulo E) SAfrontendBackend:
+   [ SuperApp( $UserName, $Number, userid, appidPool ) ]
+  -->
+   [
+   !SuperAppClient( $UserName, $Number, userid, appidPool ),
+   !SuperAppServer( $UserName, $Number, userid, appidPool )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MiniProgramFrontEndBackEnd:
+   [ MiniProgram( $A, openid, appid ) ]
+  --[ LMPFrontend( $A, openid, appid ) ]->
+   [ !MF( $A, openid, appid ), !MB( $A, openid, appid ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) AuthCodeRequest[color=#fdd5b1]:
+   [ !MF( $Issuer, openid, appid ), Fr( ~sess ), Fr( ~req ) ]
+  --[
+  Issuer( appid ), LIssurerAuthCodeRequest( $Issuer, appid, ~req )
+  ]->
+   [
+   St_MF_AuthCodeReq( $Issuer, ~sess, openid, appid ),
+   TLSClient_Out( 'GET', ~sess, $Issuer, <'authCodeReq', appid, ~req>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) SuperAppGenerateAuthCode[color=#6495ed]:
+   [
+   TLSServer_In( 'GET', ~sess, $Issuer, <'authCodeReq', appid, ~req>
+   ),
+   !SuperAppClient( $UserName, $Number, userid, appidPool ),
+   Fr( ~authCode ), In( %lifeTime )
+   ]
+  --[
+  ValidMsg( appid, appidPool ),
+  LAuthCodeGenerate( userid, %lifeTime, ~authCode )
+  ]->
+   [
+   TLSServer_Out( 'GET', ~sess, $Issuer,
+                  <'authCode', appid, ~authCode>
+   ),
+   AuthCode( ~authCode )
+   ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+restriction OneAuthCode:
+  "∀ #i #j t1 t2 lifeTime1 lifeTime2 authCode1 authCode2.
+    ((LAuthCodeGenerate( t1, lifeTime1, authCode1 ) @ #i) ∧
+     (LAuthCodeGenerate( t2, lifeTime2, authCode2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+rule (modulo E) MFgetAuthCode[color=#fdd5b1]:
+   [
+   St_MF_AuthCodeReq( $Issuer, sess, openid, appid ),
+   TLSClient_In( 'GET', sess, $Issuer, <'authCode', appid, authCode>
+   ),
+   Fr( ~sessPost )
+   ]
+  --[ LMFGetAuthCode( $Issure, appid, authCode ) ]->
+   [
+   St_MF_GetAuthCode( $Issuer, openid, appid, authCode ),
+   TLSClient_Out( 'POST', ~sessPost, $Issuer,
+                  <'authCode', appid, authCode>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MBgetAuthCode[color=#fdfd96]:
+   [
+   St_MF_GetAuthCode( $Issuer, openid, appid, authCode ),
+   TLSServer_In( 'POST', sess, $Issuer, <'authCode', appid, authCode>
+   )
+   ]
+  --[ LMBGetAuthCode( $Issuer, appid, authCode ) ]->
+   [ St_MB_GetAuthCode( $Issuer, openid, appid, authCode ) ]
+
+  // loop breaker: [1]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MBCallOauthToken[color=#fdfd96]:
+   [
+   St_MB_GetAuthCode( $Issuer, openid, appid, authCode ),
+   Fr( ~sessToken )
+   ]
+  --[ LAuthCodeConsume( authCode ) ]->
+   [
+   TLSClient_Out( 'POST', ~sessToken, $Issuer,
+                  <'tokenReq', appid, authCode>
+   ),
+   St_MB_TokenReq( $Issuer, openid, appid, authCode )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) SuperAppGenerateToken[color=#6495ed]:
+   [
+   TLSServer_In( 'POST', ~sess, $Issuer, <'tokenReq', appid, authCode>
+   ),
+   AuthCode( code ),
+   !SuperAppServer( $UserName, $Number, userid, appidPool ),
+   Fr( ~token )
+   ]
+  --[ Eq( code, authCode ), ValidMsg( appid, appidPool ) ]->
+   [
+   TLSServer_Out( 'POST', ~sess, $Issuer, <'token', appid, ~token> ),
+   Token( ~token )
+   ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MBCallInfoShareAPI[color=#fdfd96]:
+   [
+   !MB( $Issuer, openid, appid ),
+   St_MB_TokenReq( $Issuer, openid, appid, authCode ),
+   TLSClient_In( 'POST', ~sess, $Issuer, <'token', appid, token> ),
+   Fr( ~sessCall )
+   ]
+  -->
+   [
+   St_MB_CallInfoShare( $Issuer, openid, appid, token ),
+   TLSClient_Out( 'GET', ~sessCall, $Issuer,
+                  <'accessInfoReq', appid, token>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) SuperAppReturnValue[color=#fdd5b1]:
+   [
+   TLSServer_In( 'GET', ~sess, $Issuer,
+                 <'accessInfoReq', appid, token>
+   ),
+   Token( token ), !DB( userid, disclosure, sensitiveData ),
+   !SuperAppServer( $UserName, $Number, userid, appidPool )
+   ]
+  --[ ValidMsg( appid, appidPool ) ]->
+   [
+   TLSServer_Out( 'GET', ~sess, $Issuer,
+                  <'accessInfo', appid, disclosure, sensitiveData>
+   )
+   ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MBgetSentitiveData[color=#fdfd96]:
+   [
+   St_MB_CallInfoShare( $Issuer, openid, appid, token ),
+   TLSClient_In( 'GET', ~sess, $Issuer,
+                 <'accessInfo', appid, disclosure, sensitiveData>
+   )
+   ]
+  --[ LMBGetSensitiveData( appid, <disclosure, sensitiveData> ) ]->
+   [ !MBDB( $Issuer, openid, appid, <disclosure, sensitiveData> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) MBConstructCredential[color=#fdfd96]:
+   [
+   !MBDB( $Issuer, openid, appid, <disclosure, sensitiveData> ),
+   !MLTK( $Issuer, appid, PrivKey ),
+   !TEEPK( $Holder, userid, pubKey ), Fr( ~envelope_key ), Fr( ~sess )
+   ]
+  --[
+  LCredentialIssurance( $Issuer, appid,
+                        <
+                         senc(<<hash(disclosure), hash(sensitiveData)>, 
+                               sign(<hash(disclosure), hash(sensitiveData)>, PrivKey)>,
+                              ~envelope_key), 
+                         aenc(~envelope_key, pubKey)>
+  )
+  ]->
+   [
+   TLSClient_Out( 'POST', ~sess, $Issuer,
+                  <'VC_data', appid, 
+                   senc(<<hash(disclosure), hash(sensitiveData)>, 
+                         sign(<hash(disclosure), hash(sensitiveData)>, PrivKey)>,
+                        ~envelope_key), 
+                   aenc(~envelope_key, pubKey)>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) SuperAppStoreVC[color=#6495ed]:
+   [
+   TLSServer_In( 'POST', sess, $Issuer,
+                 <'VC_data', appid, 
+                  senc(<<hash(disclosure), hash(sensitiveData)>, signature>,
+                       envelope_key), 
+                  aenc(envelope_key, pk(skH))>
+   ),
+   !SuperAppClient( $UserName, $Number, userid, appidPool ),
+   !MPK( $Issuer, appid, pkI ), !TEELTK( $Holder, userid, skH ),
+   !DB( userid, disclosure, sensitiveData )
+   ]
+  --[
+  Eq( checksign(signature, <hash(disclosure), hash(sensitiveData)>,
+                pkI),
+      true
+  ),
+  ValidMsg( appid, appidPool ),
+  LSuperAppStoreVC( userid,
+                    (disclosure++sensitiveData++
+                     <<hash(disclosure), hash(sensitiveData)>, signature>)
+  )
+  ]->
+   [
+   !VC( (disclosure++sensitiveData++
+         <<hash(disclosure), hash(sensitiveData)>, signature>)
+   )
+   ]
+
+  // loop breaker: [0]
+  /*
+  rule (modulo AC) SuperAppStoreVC[color=#6495ed]:
+     [
+     TLSServer_In( 'POST', sess, $Issuer,
+                   <'VC_data', appid, 
+                    senc(<<hash(disclosure), hash(sensitiveData)>, signature>,
+                         envelope_key), 
+                    aenc(envelope_key, pk(skH))>
+     ),
+     !SuperAppClient( $UserName, $Number, userid, appidPool ),
+     !MPK( $Issuer, appid, pkI ), !TEELTK( $Holder, userid, skH ),
+     !DB( userid, disclosure, sensitiveData )
+     ]
+    --[
+    Eq( z, true ), ValidMsg( appid, appidPool ),
+    LSuperAppStoreVC( userid,
+                      (disclosure++sensitiveData++
+                       <<hash(disclosure), hash(sensitiveData)>, signature>)
+    )
+    ]->
+     [
+     !VC( (disclosure++sensitiveData++
+           <<hash(disclosure), hash(sensitiveData)>, signature>)
+     )
+     ]
+    variants (modulo AC)
+    1. disclosure
+             = disclosure.24
+       pkI   = pkI.26
+       sensitiveData
+             = sensitiveData.27
+       signature
+             = signature.29
+       z     = checksign(signature.29,
+                         <hash(disclosure.24), hash(sensitiveData.27)>, pkI.26)
+    
+    2. disclosure
+             = disclosure.32
+       pkI   = pk(x.56)
+       sensitiveData
+             = sensitiveData.35
+       signature
+             = sign(<hash(disclosure.32), hash(sensitiveData.35)>, x.56)
+       z     = true
+    // loop breaker: [0]
+  */
+
+rule (modulo E) PresentationRequest[color=#f4c2c2]:
+   [ !MF( $Verifier, openid, appid ), Fr( ~sess ), Fr( ~ShowReq ) ]
+  --[
+  Verifier( appid ),
+  LVerifierShowPreReq( $Verifier, appid, ~ShowReq )
+  ]->
+   [
+   St_MF_PresentReq( $Verifier, ~sess, openid, appid, ~ShowReq ),
+   TLSClient_Out( 'GET', ~sess, $Verifier,
+                  <'PresentationReq', appid, ~ShowReq>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+restriction UniqueRole:
+  "¬(∃ #i #j appid.
+      (Issuer( appid ) @ #i) ∧ (Verifier( appid ) @ #j))"
+  // safety formula
+
+rule (modulo E) SuperAppConstructVPwithDisclosure[color=#6495ed]:
+   [
+   St_MF_PresentReq( $Verifier, sess, openid, appid, ~ShowReq ),
+   TLSServer_In( 'GET', sess, $Verifer,
+                 <'PresentationReq', appid, ~ShowReq>
+   ),
+   !SuperAppClient( $UserName, $Number, userid, appidPool ),
+   !TEELTK( $Holder, userid, skH ), !MPK( $Verifier, appid, pkV ),
+   !VC( (Issuer_signed_JWT++disclosure++sensitiveData) ),
+   Fr( ~envelope_key )
+   ]
+  --[
+  ValidMsg( appid, appidPool ),
+  LHolderPresentVP( userid, appid, ~ShowReq,
+                    <(Issuer_signed_JWT++disclosure), 
+                     sign((Issuer_signed_JWT++disclosure), skH)>
+  )
+  ]->
+   [
+   TLSServer_Out( 'GET', sess, $Verifier,
+                  <'PresentationVP', appid, 
+                   senc(<(Issuer_signed_JWT++disclosure), 
+                         sign((Issuer_signed_JWT++disclosure), skH)>,
+                        ~envelope_key), 
+                   aenc(~envelope_key, pkV)>
+   )
+   ]
+
+  // loop breaker: [1]
+  /* has exactly the trivial AC variant */
+
+restriction replayReq:
+  "∀ userid appid req VP1 VP2 #i #j.
+    ((LHolderPresentVP( userid, appid, req, VP1 ) @ #i) ∧
+     (LHolderPresentVP( userid, appid, req, VP2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+rule (modulo E) MBVerifyPresentation[color=#f4c2c2]:
+   [
+   TLSClient_In( 'GET', sess, $Verifier,
+                 <'PresentationVP', appid, 
+                  senc(<(disclosure++<<prefixHash, postfixHash>, signature>), proof>,
+                       envelope_key), 
+                  aenc(envelope_key, pk(skV))>
+   ),
+   !MLTK( $Verifier, appid, skV ), !MPK( $Issuer, IssueID, pkI ),
+   !TEEPK( $Holder, userid, pkH )
+   ]
+  --[
+  Eq( checksign(proof,
+                (disclosure++<<prefixHash, postfixHash>, signature>), pkH),
+      true
+  ),
+  Eq( checksign(signature, <prefixHash, postfixHash>, pkI), true ),
+  Eq( hash(disclosure), prefixHash ),
+  LPresentationVerify( $Verifier, appid,
+                       (disclosure++<<prefixHash, postfixHash>, signature>),
+                       <(disclosure++<<prefixHash, postfixHash>, signature>), proof>
+  )
+  ]->
+   [ ]
+
+  /*
+  rule (modulo AC) MBVerifyPresentation[color=#f4c2c2]:
+     [
+     TLSClient_In( 'GET', sess, $Verifier,
+                   <'PresentationVP', appid, 
+                    senc(<(disclosure++<<prefixHash, postfixHash>, signature>), proof>,
+                         envelope_key), 
+                    aenc(envelope_key, pk(skV))>
+     ),
+     !MLTK( $Verifier, appid, skV ), !MPK( $Issuer, IssueID, pkI ),
+     !TEEPK( $Holder, userid, pkH )
+     ]
+    --[
+    Eq( z, true ), Eq( z.1, true ), Eq( hash(disclosure), prefixHash ),
+    LPresentationVerify( $Verifier, appid,
+                         (disclosure++<<prefixHash, postfixHash>, signature>),
+                         <(disclosure++<<prefixHash, postfixHash>, signature>), proof>
+    )
+    ]->
+     [ ]
+    variants (modulo AC)
+    1. disclosure
+             = disclosure.30
+       pkH   = pkH.32
+       pkI   = pkI.33
+       postfixHash
+             = postfixHash.34
+       prefixHash
+             = prefixHash.35
+       proof = proof.36
+       signature
+             = signature.38
+       z     = checksign(proof.36,
+                         (disclosure.30++<<prefixHash.35, postfixHash.34>, signature.38>),
+                         pkH.32)
+       z.1   = checksign(signature.38, <prefixHash.35, postfixHash.34>,
+                         pkI.33)
+    
+    2. disclosure
+             = disclosure.37
+       pkH   = pkH.39
+       pkI   = pk(x.67)
+       postfixHash
+             = postfixHash.41
+       prefixHash
+             = prefixHash.42
+       proof = proof.43
+       signature
+             = sign(<prefixHash.42, postfixHash.41>, x.67)
+       z     = checksign(proof.43,
+                         (disclosure.37++
+                          <<prefixHash.42, postfixHash.41>, 
+                           sign(<prefixHash.42, postfixHash.41>, x.67)>
+                         ),
+                         pkH.39)
+       z.1   = true
+    
+    3. disclosure
+             = disclosure.39
+       pkH   = pk(x.71)
+       pkI   = pkI.42
+       postfixHash
+             = postfixHash.43
+       prefixHash
+             = prefixHash.44
+       proof = sign((disclosure.39++
+                     <<prefixHash.44, postfixHash.43>, signature.47>),
+                    x.71)
+       signature
+             = signature.47
+       z     = true
+       z.1   = checksign(signature.47, <prefixHash.44, postfixHash.43>,
+                         pkI.42)
+    
+    4. disclosure
+             = disclosure.40
+       pkH   = pk(x.72)
+       pkI   = pk(x.73)
+       postfixHash
+             = postfixHash.44
+       prefixHash
+             = prefixHash.45
+       proof = sign((disclosure.40++
+                     <<prefixHash.45, postfixHash.44>, 
+                      sign(<prefixHash.45, postfixHash.44>, x.73)>
+                    ),
+                    x.72)
+       signature
+             = sign(<prefixHash.45, postfixHash.44>, x.73)
+       z     = true
+       z.1   = true
+  */
+
+restriction ValidMsg:
+  "∀ Pool appid #i. (ValidMsg( appid, Pool ) @ #i) ⇒ (appid ⊏ Pool)"
+  // safety formula
+
+restriction AuthCodeReqOnce:
+  "∀ Issuer appid req1 req2 #i #j.
+    ((LIssurerAuthCodeRequest( Issuer, appid, req1 ) @ #i) ∧
+     (LIssurerAuthCodeRequest( Issuer, appid, req2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+restriction OnceConstructionVC:
+  "∀ Issuer appid VC1 VC2 #i #j.
+    ((LCredentialIssurance( Issuer, appid, VC1 ) @ #i) ∧
+     (LCredentialIssurance( Issuer, appid, VC2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+restriction OncePresentationReq:
+  "∀ V1 V2 appid1 appid2 req1 req2 #i #j.
+    ((LVerifierShowPreReq( V1, appid1, req1 ) @ #i) ∧
+     (LVerifierShowPreReq( V2, appid2, req2 ) @ #j)) ⇒
+    (#i = #j)"
+  // safety formula
+
+lemma exec_all [heuristic={executability}]:
+  exists-trace
+  "∃ Issuer appidI authCodeReq #t0 userid lifeTime authCode #t1
+     Verifier appidV VC_data credential ShowReq VP #t2 #t3 #t4 #t5 #tx
+     #t6 #t7.
+    ((((((((LIssurerAuthCodeRequest( Issuer, appidI, authCodeReq
+            ) @ #t0) ∧
+           (LAuthCodeGenerate( userid, lifeTime, authCode ) @ #t1)) ∧
+          (LMFGetAuthCode( Issuer, appidI, authCode ) @ #t2)) ∧
+         (LMBGetAuthCode( Issuer, appidI, authCode ) @ #t3)) ∧
+        (LAuthCodeConsume( authCode ) @ #t4)) ∧
+       (LCredentialIssurance( Issuer, appidI, VC_data ) @ #tx)) ∧
+      (LSuperAppStoreVC( userid, credential ) @ #t5)) ∧
+     (LVerifierShowPreReq( Verifier, appidV, ShowReq ) @ #t6)) ∧
+    (LHolderPresentVP( userid, appidV, ShowReq, VP ) @ #t7)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ Issuer appidI authCodeReq #t0 userid lifeTime authCode #t1
+   Verifier appidV VC_data credential ShowReq VP #t2 #t3 #t4 #t5 #tx
+   #t6 #t7.
+  (LIssurerAuthCodeRequest( Issuer, appidI, authCodeReq ) @ #t0) ∧
+  (LAuthCodeGenerate( userid, lifeTime, authCode ) @ #t1) ∧
+  (LMFGetAuthCode( Issuer, appidI, authCode ) @ #t2) ∧
+  (LMBGetAuthCode( Issuer, appidI, authCode ) @ #t3) ∧
+  (LAuthCodeConsume( authCode ) @ #t4) ∧
+  (LCredentialIssurance( Issuer, appidI, VC_data ) @ #tx) ∧
+  (LSuperAppStoreVC( userid, credential ) @ #t5) ∧
+  (LVerifierShowPreReq( Verifier, appidV, ShowReq ) @ #t6) ∧
+  (LHolderPresentVP( userid, appidV, ShowReq, VP ) @ #t7)"
+*/
+simplify
+solve( St_MF_PresentReq( $Verifier.1, sess.7, openid.6, appidV,
+                         ~ShowReq
+       ) ▶₀ #t7 )
+  case PresentationRequest
+  solve( !TEELTK( $Holder.1, userid, skH.1 ) ▶₃ #t7 )
+    case InstallSuperAppClient
+    solve( !MPK( $Verifier, ~appid.3, pkV ) ▶₄ #t7 )
+      case MiniprogramRegister
+      solve( TLSServer_In( 'GET', ~sess.5, $Verifer,
+                           <'PresentationReq', ~appid.3, ~ShowReq>
+             ) ▶₁ #t7 )
+        case TLSClientToServer
+        solve( !VC( (Issuer_signed_JWT++disclosure.2++sensitiveData.2)
+               ) ▶₅ #t7 )
+          case SuperAppStoreVC_case_1
+          solve( TLSServer_In( 'POST', sess.4, $Issuer.4,
+                               <'VC_data', appid.2, 
+                                senc(<<hash(disclosure.1), hash(sensitiveData.1)>, 
+                                      sign(<hash(disclosure.1), hash(sensitiveData.1)>, x)>,
+                                     envelope_key), 
+                                aenc(envelope_key, pk(skH))>
+                 ) ▶₀ #t5 )
+            case TLSClientToServer
+            solve( TLSServer_In( 'POST', sess.7, $Issuer.4,
+                                 <'VC_data', ~appid.4, 
+                                  senc(<<hash(~disclosure), hash(~sensitiveData)>, 
+                                        sign(<hash(~disclosure), hash(~sensitiveData)>, ~k.3)>,
+                                       envelope_key.3), 
+                                  aenc(envelope_key.3, pk(~k))>
+                   ) ▶₀ #vr.6 )
+              case TLSClientToServer
+              solve( TLSServer_In( 'GET', ~sess.1, $Issuer.1,
+                                   <'authCodeReq', ~appid, ~req.1>
+                     ) ▶₀ #t1 )
+                case TLSClientToServer
+                solve( TLSServer_In( 'POST', sess.3, $Issuer,
+                                     <'authCode', appidI, ~authCode>
+                       ) ▶₁ #t3 )
+                  case TLSClientToServer
+                  solve( TLSServer_In( 'GET', ~sess.4, $Issuer,
+                                       <'accessInfoReq', ~appid, ~token>
+                         ) ▶₀ #vr.22 )
+                    case TLSClientToServer
+                    solve( TLSServer_In( 'POST', sess.5, $Issuer,
+                                         <'authCode', ~appid, ~authCode>
+                           ) ▶₁ #vr.20 )
+                      case TLSClientToServer
+                      solve( TLSServer_In( 'POST', ~sess.4, $Issuer,
+                                           <'tokenReq', ~appid, ~authCode>
+                             ) ▶₀ #vr.25 )
+                        case TLSClientToServer
+                        solve( TLSClient_In( 'GET', sess.1, $Issuer.1,
+                                             <'authCode', ~appid, ~authCode>
+                               ) ▶₁ #t2 )
+                          case TLSServerToClient
+                          solve( St_MF_AuthCodeReq( $Issuer, ~sess, openid.1, ~appid
+                                 ) ▶₀ #t2 )
+                            case AuthCodeRequest
+                            solve( St_MF_GetAuthCode( $Issuer, openid.1, ~appid, ~authCode
+                                   ) ▶₀ #t3 )
+                              case MFgetAuthCode
+                              solve( St_MB_GetAuthCode( $Issuer.1, openid.1, appid.2, ~authCode
+                                     ) ▶₀ #t4 )
+                                case MBgetAuthCode
+                                solve( !MPK( $Issuer, ~appid, pk(~k.1) ) ▶₂ #t5 )
+                                  case MiniprogramRegister
+                                  solve( !TEELTK( $Holder.1, ~userid, ~k ) ▶₃ #t5 )
+                                    case InstallSuperAppClient
+                                    solve( !DB( ~userid, ~disclosure, ~sensitiveData ) ▶₄ #t5 )
+                                      case InstallSuperAppClient
+                                      solve( !SuperAppClient( $UserName.3, $Number.3, ~userid,
+                                                              appidPool.2
+                                             ) ▶₂ #t7 )
+                                        case SAfrontendBackend_case_1
+                                        by contradiction /* contradictory subterm store */
+                                      next
+                                        case SAfrontendBackend_case_2
+                                        solve( !SuperAppClient( $UserName.2, $Number.2, ~userid,
+                                                                appidPool.1
+                                               ) ▶₁ #t5 )
+                                          case SAfrontendBackend_case_1
+                                          by contradiction /* contradictory subterm store */
+                                        next
+                                          case SAfrontendBackend_case_2
+                                          solve( SuperApp( $UserName.4, $Number.4, ~userid,
+                                                           appidPool.3
+                                                 ) ▶₃ #vr.1 )
+                                            case InstallSuperAppClient
+                                            solve( (#vr.8 = #vr.1)  ∥ (#vr.1 < #vr.8) )
+                                              case case_2
+                                              solve( SuperApp( $UserName.5, $Number.5, ~userid,
+                                                               appidPool.4
+                                                     ) ▶₃ #vr.8 )
+                                                case MiniprogramRegister
+                                                solve( (#vr.50 = #vr.1)  ∥ (#vr.1 < #vr.50) )
+                                                  case case_1
+                                                  solve( SuperApp( $UserName.4, $Number.4, ~userid,
+                                                                   appidPool.3
+                                                         ) ▶₃ #vr.9 )
+                                                    case MiniprogramRegister
+                                                    solve( SuperApp( $UserName.5, $Number.5,
+                                                                     ~userid, appidPool.4
+                                                           ) ▶₃ #vr.27 )
+                                                      case MiniprogramRegister
+                                                      solve( SuperApp( $UserName.6, $Number.6,
+                                                                       ~userid, appidPool.5
+                                                             ) ▶₃ #vr.30 )
+                                                        case MiniprogramRegister
+                                                        solve( SuperApp( $UserName.1, $Number.1,
+                                                                         ~userid, appidPool
+                                                               ) ▶₃ #vr.32 )
+                                                          case MiniprogramRegister
+                                                          solve( SuperApp( $UserName.3, $Number.3,
+                                                                           ~userid, appidPool.2
+                                                                 ) ▶₃ #vr.47 )
+                                                            case MiniprogramRegister
+                                                            solve( (#vr.54 = #vr.1)  ∥
+                                                                   (#vr.1 < #vr.54) )
+                                                              case case_2
+                                                              solve( SuperApp( $UserName.2,
+                                                                               $Number.2, ~userid,
+                                                                               appidPool.1
+                                                                     ) ▶₃ #vr.49 )
+                                                                case MiniprogramRegister
+                                                                solve( SuperApp( $UserName.4,
+                                                                                 $Number.4, ~userid,
+                                                                                 appidPool.3
+                                                                       ) ▶₃ #vr.50 )
+                                                                  case MiniprogramRegister
+                                                                  solve( (#vr.56 = #vr.1)  ∥
+                                                                         (#vr.1 < #vr.56) )
+                                                                    case case_1
+                                                                    solve( SuperApp( $UserName.4,
+                                                                                     $Number.4,
+                                                                                     ~userid,
+                                                                                     appidPool.3
+                                                                           ) ▶₃ #vr.50 )
+                                                                      case MiniprogramRegister
+                                                                      solve( (#vr.55 = #vr.1)  ∥
+                                                                             (#vr.1 < #vr.55) )
+                                                                        case case_1
+                                                                        solve( SuperApp( $UserName.4,
+                                                                                         $Number.4,
+                                                                                         ~userid,
+                                                                                         appidPool.3
+                                                                               ) ▶₃ #vr.48 )
+                                                                          case MiniprogramRegister
+                                                                          solve( (#vr.52 = #vr.1)  ∥
+                                                                                 (#vr.1 < #vr.52) )
+                                                                            case case_1
+                                                                            solve( SuperApp( $UserName.1,
+                                                                                             $Number.1,
+                                                                                             ~userid,
+                                                                                             appidPool
+                                                                                   ) ▶₃ #vr.46 )
+                                                                              case MiniprogramRegister
+                                                                              solve( (#vr.49 =
+                                                                                      #vr.1)  ∥
+                                                                                     (#vr.1 < #vr.49) )
+                                                                                case case_1
+                                                                                solve( SuperApp( $UserName.2,
+                                                                                                 $Number.2,
+                                                                                                 ~userid,
+                                                                                                 appidPool.1
+                                                                                       ) ▶₃ #vr.44 )
+                                                                                  case MiniprogramRegister
+                                                                                  solve( (#vr.46 =
+                                                                                          #vr.1)  ∥
+                                                                                         (#vr.1 < #vr.46) )
+                                                                                    case case_1
+                                                                                    solve( SuperApp( $UserName.1,
+                                                                                                     $Number.1,
+                                                                                                     ~userid,
+                                                                                                     appidPool
+                                                                                           ) ▶₃ #vr.42 )
+                                                                                      case MiniprogramRegister
+                                                                                      solve( (#vr.43 =
+                                                                                              #vr.1)  ∥
+                                                                                             (#vr.1 < #vr.43) )
+                                                                                        case case_1
+                                                                                        SOLVED // trace found
+                                                                                      qed
+                                                                                    qed
+                                                                                  qed
+                                                                                qed
+                                                                              qed
+                                                                            qed
+                                                                          qed
+                                                                        qed
+                                                                      qed
+                                                                    qed
+                                                                  qed
+                                                                qed
+                                                              qed
+                                                            qed
+                                                          qed
+                                                        qed
+                                                      qed
+                                                    qed
+                                                  qed
+                                                qed
+                                              qed
+                                            qed
+                                          qed
+                                        qed
+                                      qed
+                                    qed
+                                  qed
+                                qed
+                              qed
+                            qed
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        next
+          case SuperAppStoreVC_case_2
+          by sorry
+        next
+          case SuperAppStoreVC_case_3
+          by sorry
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma test123 [heuristic={executability}]:
+  exists-trace
+  "∃ userid credential #i.
+    LSuperAppStoreVC( userid, credential ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ userid credential #i.
+  (LSuperAppStoreVC( userid, credential ) @ #i)"
+*/
+by sorry
+
+lemma HolderPresentVP [heuristic={HolderPresentVP}]:
+  exists-trace
+  "∃ userid appidV ShowReq VP #i.
+    LHolderPresentVP( userid, appidV, ShowReq, VP ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ userid appidV ShowReq VP #i.
+  (LHolderPresentVP( userid, appidV, ShowReq, VP ) @ #i)"
+*/
+simplify
+solve( St_MF_PresentReq( $Verifier, sess, openid, appidV, ~ShowReq
+       ) ▶₀ #i )
+  case PresentationRequest
+  solve( !TEELTK( $Holder, userid, skH ) ▶₃ #i )
+    case InstallSuperAppClient
+    solve( !MPK( $Verifier, ~appid, pkV ) ▶₄ #i )
+      case MiniprogramRegister
+      solve( TLSServer_In( 'GET', ~sess, $Verifer,
+                           <'PresentationReq', ~appid, ~ShowReq>
+             ) ▶₁ #i )
+        case TLSClientToServer
+        solve( !VC( (Issuer_signed_JWT++disclosure++sensitiveData)
+               ) ▶₅ #i )
+          case SuperAppStoreVC_case_1
+          solve( TLSServer_In( 'POST', sess.1, $Issuer,
+                               <'VC_data', ~appid.1, 
+                                senc(<<hash(~disclosure), hash(~sensitiveData)>, 
+                                      sign(<hash(~disclosure), hash(~sensitiveData)>, ~k.2)>,
+                                     envelope_key.1), 
+                                aenc(envelope_key.1, pk(~k))>
+                 ) ▶₀ #vr.7 )
+            case TLSClientToServer
+            solve( TLSServer_In( 'POST', sess.4, $Issuer,
+                                 <'authCode', ~appid.1, ~authCode>
+                   ) ▶₁ #vr.22 )
+              case TLSClientToServer
+              solve( TLSServer_In( 'POST', ~sess.3, $Issuer,
+                                   <'tokenReq', ~appid.1, ~authCode>
+                     ) ▶₀ #vr.27 )
+                case TLSClientToServer
+                solve( TLSServer_In( 'GET', ~sess.2, $Issuer,
+                                     <'accessInfoReq', ~appid.1, ~token>
+                       ) ▶₀ #vr.24 )
+                  case TLSClientToServer
+                  solve( TLSServer_In( 'GET', ~sess.2, $Issuer,
+                                       <'authCodeReq', ~appid.1, ~req.1>
+                         ) ▶₀ #vr.32 )
+                    case TLSClientToServer
+                    solve( !SuperAppClient( $UserName, $Number, ~userid, appidPool
+                           ) ▶₂ #i )
+                      case SAfrontendBackend_case_1
+                      by sorry
+                    next
+                      case SAfrontendBackend_case_2
+                      solve( SuperApp( $UserName.2, $Number.2, ~userid, appidPool.1
+                             ) ▶₃ #vr.2 )
+                        case InstallSuperAppClient
+                        solve( (#vr.9 = #vr.2)  ∥ (#vr.2 < #vr.9) )
+                          case case_1
+                          by sorry
+                        next
+                          case case_2
+                          solve( SuperApp( $UserName.3, $Number.3, ~userid, appidPool.2
+                                 ) ▶₃ #vr.9 )
+                            case InstallSuperAppClient
+                            by sorry
+                          next
+                            case MiniprogramRegister
+                            solve( (#vr.54 = #vr.2)  ∥ (#vr.2 < #vr.54) )
+                              case case_1
+                              solve( SuperApp( $UserName.2, $Number.2, ~userid, appidPool.1
+                                     ) ▶₃ #vr.10 )
+                                case MiniprogramRegister
+                                solve( SuperApp( $UserName.3, $Number.3, ~userid, appidPool.2
+                                       ) ▶₃ #vr.34 )
+                                  case MiniprogramRegister
+                                  solve( SuperApp( $UserName.4, $Number.4, ~userid, appidPool.3
+                                         ) ▶₃ #vr.37 )
+                                    case MiniprogramRegister
+                                    solve( SuperApp( $UserName.5, $Number.5, ~userid, appidPool.4
+                                           ) ▶₃ #vr.39 )
+                                      case MiniprogramRegister
+                                      solve( SuperApp( $UserName, $Number, ~userid, appidPool
+                                             ) ▶₃ #vr.53 )
+                                        case MiniprogramRegister
+                                        solve( (#vr.58 = #vr.2)  ∥ (#vr.2 < #vr.58) )
+                                          case case_1
+                                          by sorry
+                                        next
+                                          case case_2
+                                          solve( SuperApp( $UserName.2, $Number.2, ~userid,
+                                                           appidPool.1
+                                                 ) ▶₃ #vr.54 )
+                                            case InstallSuperAppClient
+                                            by sorry
+                                          next
+                                            case MiniprogramRegister
+                                            solve( (#vr.59 = #vr.2)  ∥ (#vr.2 < #vr.59) )
+                                              case case_1
+                                              solve( SuperApp( $UserName.2, $Number.2, ~userid,
+                                                               appidPool.1
+                                                     ) ▶₃ #vr.54 )
+                                                case MiniprogramRegister
+                                                solve( (#vr.58 = #vr.2)  ∥ (#vr.2 < #vr.58) )
+                                                  case case_1
+                                                  solve( SuperApp( $UserName.2, $Number.2, ~userid,
+                                                                   appidPool.1
+                                                         ) ▶₃ #vr.52 )
+                                                    case MiniprogramRegister
+                                                    solve( (#vr.55 = #vr.2)  ∥ (#vr.2 < #vr.55) )
+                                                      case case_1
+                                                      solve( SuperApp( $UserName.2, $Number.2,
+                                                                       ~userid, appidPool.1
+                                                             ) ▶₃ #vr.50 )
+                                                        case MiniprogramRegister
+                                                        solve( (#vr.52 = #vr.2)  ∥
+                                                               (#vr.2 < #vr.52) )
+                                                          case case_1
+                                                          solve( SuperApp( $UserName, $Number,
+                                                                           ~userid, appidPool
+                                                                 ) ▶₃ #vr.48 )
+                                                            case MiniprogramRegister
+                                                            solve( (#vr.49 = #vr.2)  ∥
+                                                                   (#vr.2 < #vr.49) )
+                                                              case case_1
+                                                              SOLVED // trace found
+                                                            next
+                                                              case case_2
+                                                              by sorry
+                                                            qed
+                                                          qed
+                                                        next
+                                                          case case_2
+                                                          by sorry
+                                                        qed
+                                                      qed
+                                                    next
+                                                      case case_2
+                                                      by sorry
+                                                    qed
+                                                  qed
+                                                next
+                                                  case case_2
+                                                  by sorry
+                                                qed
+                                              qed
+                                            next
+                                              case case_2
+                                              by sorry
+                                            qed
+                                          qed
+                                        qed
+                                      qed
+                                    qed
+                                  qed
+                                qed
+                              qed
+                            next
+                              case case_2
+                              by sorry
+                            qed
+                          qed
+                        qed
+                      next
+                        case MiniprogramRegister
+                        by sorry
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        next
+          case SuperAppStoreVC_case_2
+          by sorry
+        next
+          case SuperAppStoreVC_case_3
+          by sorry
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma authenticationVP:
+  all-traces
+  "∀ V appidV payload VP #i.
+    (LPresentationVerify( V, appidV, payload, VP ) @ #i) ⇒
+    (∃ userid req #j.
+      (LHolderPresentVP( userid, appidV, req, VP ) @ #j) ∧ (#j < #i))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ V appidV payload VP #i.
+  (LPresentationVerify( V, appidV, payload, VP ) @ #i)
+ ∧
+  ∀ userid req #j.
+   (LHolderPresentVP( userid, appidV, req, VP ) @ #j) ⇒ ¬(#j < #i)"
+*/
+by sorry
+
+lemma loop_break [reuse, use_induction]:
+  all-traces
+  "∀ A userid appidPool #i.
+    (LMiniprogramRegister( A, userid, appidPool ) @ #i) ⇒
+    (∃ #j. (LInstallSuperApp( userid ) @ #j) ∧ (#j < #i))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A userid appidPool #i.
+  (LMiniprogramRegister( A, userid, appidPool ) @ #i)
+ ∧
+  ∀ #j. (LInstallSuperApp( userid ) @ #j) ⇒ ¬(#j < #i)"
+*/
+by sorry
+
+lemma sanity_check [reuse]:
+  all-traces
+  "∀ #i A openid appid.
+    (LMPFrontend( A, openid, appid ) @ #i) ⇒
+    (∃ appidPool userid #j.
+      ((LMiniprogramRegister( A, userid, appidPool ) @ #j) ∧ (#j < #i)) ∧
+      (appid ⊏ appidPool))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i A openid appid.
+  (LMPFrontend( A, openid, appid ) @ #i)
+ ∧
+  ∀ appidPool userid #j.
+   (LMiniprogramRegister( A, userid, appidPool ) @ #j)
+  ⇒
+   ((¬(#j < #i)) ∨ (¬(appid ⊏ appidPool)))"
+*/
+by sorry
+
+lemma StrictIncreaseAppidPool [use_induction, reuse]:
+  all-traces
+  "∀ A userid appidPool1 appidPool2 #i #j.
+    (((LMiniprogramRegister( A, userid, appidPool1 ) @ #i) ∧
+      (LMiniprogramRegister( A, userid, appidPool2 ) @ #j)) ∧
+     (#i < #j)) ⇒
+    (appidPool1 ⊏ appidPool2)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A userid appidPool1 appidPool2 #i #j.
+  (LMiniprogramRegister( A, userid, appidPool1 ) @ #i) ∧
+  (LMiniprogramRegister( A, userid, appidPool2 ) @ #j)
+ ∧
+  (#i < #j) ∧ (¬(appidPool1 ⊏ appidPool2))"
+*/
+by sorry
+
+lemma IncreaseAppidPool [use_induction, reuse]:
+  all-traces
+  "∀ A userid appidPool1 appidPool2 #i #j.
+    (((LMiniprogramRegister( A, userid, appidPool1 ) @ #i) ∧
+      (LMiniprogramRegister( A, userid, appidPool2 ) @ #j)) ∧
+     (#i < #j)) ⇒
+    (¬(appidPool2 ⊏ appidPool1))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A userid appidPool1 appidPool2 #i #j.
+  (LMiniprogramRegister( A, userid, appidPool1 ) @ #i) ∧
+  (LMiniprogramRegister( A, userid, appidPool2 ) @ #j)
+ ∧
+  (#i < #j) ∧ (appidPool2 ⊏ appidPool1)"
+*/
+by sorry
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.8.0
+Maude version 2.7.1
+Git revision: UNKNOWN, branch: UNKNOWN
+Compiled at: 2023-08-30 13:15:41.590881948 UTC
+*/
+
+end

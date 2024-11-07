@@ -410,9 +410,13 @@ rule MBConstructCredential[color=#FDFD96]:
   /* The Mini-program generates a VC in the backend */
   [ 
     // !VC(<VC_msg, pubKey, VC_msg_sign>)
-    TLSClient_Out('POST', ~sess, $Issuer, <'VC_data', appid, VC_data>),
+    TLSServer_Out('POST', ~sess, $Issuer, <'VC_data', appid, VC_data>)
   ]
-  
+
+rule IssuerMBSendVCToMF:
+[TLSClient_In('POST', ~sess, $Issuer, <'VC_data', appid, VC_data>)]
+--[]->
+[JSAPI(<'importVC', appid, VC_data>)]
 
 rule SuperAppStoreVC[color=#6495ED]:
   let pkH = pk(skH)
@@ -422,7 +426,7 @@ rule SuperAppStoreVC[color=#6495ED]:
       envelope_key_encrypted = aenc(envelope_key, pkH)
       VC_data = <senc(Issuer_signed_JWT, envelope_key), envelope_key_encrypted>
   in
-  [ TLSServer_In('POST', sess, $Issuer, <'VC_data', appid, VC_data>),
+  [ JSAPI(<'importVC', appid, VC_data>),
     !SuperAppClient($UserName, $Number, userid, appidPool),
     !MPK($Issuer, appid, pkI),
     !TEELTK($Holder, userid, skH),

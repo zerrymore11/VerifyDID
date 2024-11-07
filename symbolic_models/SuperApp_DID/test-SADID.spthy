@@ -4,7 +4,6 @@ begin
 
 builtins: natural-numbers, multiset
 
-//heuristic: o "executability"
 
 functions: 
 pk/1, aenc/2, adec/2,
@@ -23,107 +22,13 @@ equations: checksign(sign(m, k), m, pk(k)) = true
 restriction equal:
   "All a b #i. Eq(a, b)@i ==> a = b"
 
-
-tactic: executability
-presort: s
-prio:
-    regex ".*MF\(.*"
-prio:
-    regex ".*St_\(.*"
-prio:
-    regex ".*TLSServer_In\(.*"
-prio:
-    regex ".*TLSClient_In\(.*"
-prio:
-    regex ".*MB\(.*" 
-deprio:
-    regex ".*⊏.*\+x.*"
-deprio:
-    regex ".*⊏.*"
-deprio:
-    regex ".*SuperAppClient\(.*"
-deprio:
-    regex ".*SuperAppServer\(.*"
-
-tactic: test123
-presort: s
-prio:
-    regex ".*MF\(.*"
-prio:
-    regex ".*St_\(.*"
-prio:
-    regex ".*TLSServer_In\(.*"
-// prio:
-//     isFactName "!Phone"
-// prio:
-//     isFactName "!MB.*"
-deprio:
-    regex ".*SuperAppClient\(.*"
-// deprio:
-//     isFactName "!SuperAppServer"
-
+// Try to simplify the whole program
 
 /*=== HTTPS: TLS channel ===*/
-rule Domain:
-  []
+rule TLSChannel[color=#FFFFFF]:
+  [ TLS_Send(method, ~sess, $Domain, msg)]
   -->
-  [ !Domain($Domain) ]
-
-rule DomainCompromise:
-  [ !Domain($Domain) ]
-  --[ CompromisedDomain($Domain)
-    , AdversaryActivity() ]->
-  [ !DomainCompromise($Domain) ]
-
-rule TLSClientOut[color=#FFFFFF]:
-  [ TLSClient_Out(method, ~sess, $Domain, msg), 
-    !Domain($Domain) ]
-  -->
-  [ !TLSClient(method, ~sess, $Domain, msg) ]
-
-// rule TLSAdversaryClientOut[color=#FF6961]:
-//   [ In(method), 
-//     In(~sess), 
-//     In(msg), 
-//     !Domain($Domain) ]
-//   -->
-//   [ !TLSClient(method, ~sess, $Domain, msg) ]
-
-rule TLSServerOut[color=#FFFFFF]:
-  [ TLSServer_Out(method, ~sess, $Domain, msg), 
-    !Domain($Domain) ]
-  -->
-  [ !TLSServer(method, ~sess, $Domain, msg) ]
-
-// rule TLSAdversaryServerOut[color=#FF6961]:
-//   [ In(method), 
-//     In(~sess), 
-//     In(msg), 
-//     !DomainCompromise($Domain) ]
-//   --[ AdversaryActivity() ]->
-//   [ !TLSServer(method, ~sess, $Domain, msg) ]
-
-rule TLSClientToServer[color=#FFFFFF]:
-  [ !TLSClient(method, ~sess, $Domain, msg) ]
-  -->
-  [ TLSServer_In(method, ~sess, $Domain, msg) ]
-
-// rule TLSClientToAdversaryServer[color=#FF6961]:
-//   [ !TLSClient(method, ~sess, $Domain, msg)
-//   , !DomainCompromise($Domain) ]
-//   --[ AdversaryActivity() ]->
-//   [ Out(msg), Out(~sess) ]
-
-rule TLSServerToClient[color=#FFFFFF]:
-  [ !TLSServer(method, ~sess, $Domain, msg) ]
-  -->
-  [ TLSClient_In(method, ~sess, $Domain, msg) ]
-
-// rule TLSServerToAdversaryClient[color=#FF6961]:
-//   [ In(~adversarySess), !TLSServer(method, ~adversarySess, $Domain, msg) ]
-//   --[ AdversaryActivity() ]->
-//   [ Out(msg) ]
-
+  [ TLS_Recv(method, ~sess, $Domain, msg)]
 
 
 /*=== Phone Initialization ===*/
