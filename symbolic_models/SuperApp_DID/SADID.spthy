@@ -4,7 +4,7 @@ begin
 
 builtins: natural-numbers, multiset
 
-heuristic: o "oracleDID"
+//heuristic: o "oracleDID"
 
 functions: 
 pk/1, aenc/2, adec/2,
@@ -136,11 +136,11 @@ rule Phone[color=#004225]:
 
 /*=== Install SuperApp client ===*/
 /*--------------------------------------------*/
-/* An OpenID is a unique identifier for Alipay 
+/* A userid is a unique identifier for Alipay 
  * users at the application level. When Alipay 
  * users access different applications such as 
  * mini-programs, web-based mobile applications, 
- * or Official Accounts, a unique OpenID is generated. */
+ * or Official Accounts, another OpenID is generated. */
 /*------------------------------------------- */
 rule InstallSuperAppClient[color=#6495ED]:
 	[	!Phone($UserName, $Number),
@@ -154,7 +154,7 @@ rule InstallSuperAppClient[color=#6495ED]:
     SuperApp($UserName, $Number, ~userid, 'null'),
     // !SuperAppClient($UserName, $Number, ~userid, 'null'),
     // !SuperAppServer($UserName, $Number, ~userid, 'null'),
-    !TEELTK($Holder, ~userid, ~k),
+    !TEELTK($Holder, ~userid, ~k), // DID private key
 	  !TEEPK($Holder, ~userid, pk(~k)),
 	  Out(pk(~k)),
 		!DB(~userid, ~disclosure, ~sensitiveData) ]
