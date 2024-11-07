@@ -418,6 +418,11 @@ rule IssuerMBSendVCToMF:
 --[]->
 [JSAPI(<'importVC', appid, VC_data>)]
 
+rule Reveal_JSAPI:
+  [JSAPI(<'importVC', appid, VC_data>)]
+  --[RevealJSAPImsg()]->
+  [Out(VC_data)]
+
 rule SuperAppStoreVC[color=#6495ED]:
   let pkH = pk(skH)
       digest = <hash(disclosure), hash(sensitiveData)>  
@@ -649,5 +654,14 @@ lemma IncreaseAppidPool[use_induction, reuse]:
   & #i < #j
   ==>
     not (appidPool2 << appidPool1)"
+
+lemma Credencial_secrecy:
+"
+not(
+    Ex userid credential #i #j.
+    LSuperAppStoreVC(userid, credential) @ #i
+    & K(credential) @ #j
+)
+"
 
 end
