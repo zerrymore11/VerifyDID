@@ -416,12 +416,13 @@ rule MBConstructCredential[color=#FDFD96]:
 rule IssuerMBSendVCToMF:
 [TLSClient_In('POST', ~sess, $Issuer, <'VC_data', appid, VC_data>)]
 --[]->
-[JSAPI(<'importVC', appid, VC_data>)]
+[Out(<'importVC', appid, VC_data>)]
+//Out(VC_data)]
 
-rule Reveal_JSAPI:
-  [JSAPI(<'importVC', appid, VC_data>)]
-  --[RevealJSAPImsg()]->
-  [Out(VC_data)]
+// rule Reveal_JSAPI:
+//   [JSAPI(<'importVC', appid, VC_data>)]
+//   --[RevealJSAPImsg()]->
+//   [Out(VC_data)]
 
 rule SuperAppStoreVC[color=#6495ED]:
   let pkH = pk(skH)
@@ -431,7 +432,7 @@ rule SuperAppStoreVC[color=#6495ED]:
       envelope_key_encrypted = aenc(envelope_key, pkH)
       VC_data = <senc(Issuer_signed_JWT, envelope_key), envelope_key_encrypted>
   in
-  [ JSAPI(<'importVC', appid, VC_data>),
+  [ In(<'importVC', appid, VC_data>),
     !SuperAppClient($UserName, $Number, userid, appidPool),
     !MPK($Issuer, appid, pkI),
     !TEELTK($Holder, userid, skH),
@@ -661,6 +662,15 @@ not(
     Ex userid credential #i #j.
     LSuperAppStoreVC(userid, credential) @ #i
     & K(credential) @ #j
+)
+"
+
+lemma VC_Data_secrecy:
+"
+not(
+    Ex Issuer appid VC_data #i #j.
+    LCredentialIssurance(Issuer, appid, VC_data)  @ #i
+    & K(VC_data) @ #j
 )
 "
 
